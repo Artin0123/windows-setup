@@ -5,7 +5,7 @@
 #
 # 流程：
 #   1. 下載 csc-build.cmd 與 .cs，編譯成 exe
-#   2. 搬到 %USERPROFILE%\portable-exe（launcher 並註冊開機排程）與 %USERPROFILE%\scoop\shims（ffmpeg）
+#   2. 搬到 %USERPROFILE%\portable-exe（launcher 並註冊開機排程）與 %USERPROFILE%\scoop\shims（ffmpeg、viewexif）
 #   3. 依序執行 shell-env.ps1、venv.ps1、windows-optimize.ps1（皆不需管理員）
 #   ※ 需要管理員的 windows-optimize-admin.ps1（含 hotkey）不在此流程，請另外執行，結尾會印出指令
 #
@@ -95,7 +95,8 @@ function Invoke-WindowsSetup {
             @{ Cs = 'rclone-operator.cs';   Target = '';       Exes = @('rclone-transfer.exe', 'rclone-delete.exe'); Dest = (Join-Path $portableDir 'rclone-operator') },
             @{ Cs = 'move-pi-sessions.cs';  Target = '';       Exes = @('move-pi-sessions.exe');                    Dest = (Join-Path $portableDir 'move-pi-session') },
             @{ Cs = 'launcher.cs';          Target = 'winexe'; Exes = @('launcher.exe');                            Dest = $portableDir },
-            @{ Cs = 'ffmpeg.cs';            Target = 'exe';    Exes = @('ffmpeg.exe');                              Dest = $shimsDir }
+            @{ Cs = 'ffmpeg.cs';            Target = 'exe';    Exes = @('ffmpeg.exe');                              Dest = $shimsDir },
+            @{ Cs = 'viewexif.cs';          Target = '';       Exes = @('viewexif.exe');                            Dest = $shimsDir }
         )
         foreach ($t in $targets) {
             Write-Host "-> $($t.Cs)" -ForegroundColor Yellow
