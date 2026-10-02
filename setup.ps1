@@ -6,7 +6,8 @@
 # 流程：
 #   1. 下載 csc-build.cmd 與 .cs，編譯成 exe
 #   2. 搬到 %USERPROFILE%\portable-exe（launcher 並註冊開機排程）與 %USERPROFILE%\scoop\shims（ffmpeg）
-#   3. 依序執行 venv.ps1、windows-optimize.ps1、windows-optimize-admin.ps1（hotkey 已併入 admin 腳本）
+#   3. 依序執行 venv.ps1、windows-optimize.ps1（皆不需管理員）
+#   ※ 需要管理員的 windows-optimize-admin.ps1（含 hotkey）不在此流程，請另外執行，結尾會印出指令
 #
 # 選用環境變數：
 #   SETUP_STEPS   只跑部分步驟，逗號分隔：build,task,venv,optimize（預設全部）
@@ -140,13 +141,13 @@ function Invoke-WindowsSetup {
     # ---------------------------------------------------------------- windows-optimize
     if ($steps -contains 'optimize') {
         Write-Host '=== [3/3] windows-optimize ===' -ForegroundColor Cyan
-        $optA     = Get-RemoteScript 'windows-optimize.ps1'          # 免管理員（結尾會重啟檔案總管並 Pause）
-        $optAdmin = Get-RemoteScript 'windows-optimize-admin.ps1'    # 會自行提權，並在新視窗執行
+        $optA = Get-RemoteScript 'windows-optimize.ps1'    # 免管理員（結尾會重啟檔案總管並 Pause）
         & $psExe -NoProfile -ExecutionPolicy Bypass -File $optA
-        & $psExe -NoProfile -ExecutionPolicy Bypass -File $optAdmin
     }
 
-    Write-Host '全部步驟已送出。admin 優化會在另一個提權視窗執行，請到該視窗確認結果。' -ForegroundColor Cyan
+    Write-Host '完成（以上皆未使用管理員權限）。' -ForegroundColor Cyan
+    Write-Host '需要管理員的優化與 hotkey 請另外執行：' -ForegroundColor Yellow
+    Write-Host "  irm $baseUrl/windows-optimize-admin.ps1 | iex" -ForegroundColor Yellow
 }
 
 Invoke-WindowsSetup
