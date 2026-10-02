@@ -10,9 +10,25 @@ function Update-MarkedBlock {
         [string]$EndMarker,
         [string]$NewBlock
     )
-    if ($Content -and $Content -match [regex]::Escape($StartMarker)) {
+    if ($Content) {
         $pattern = '(?s)' + [regex]::Escape($StartMarker) + '.*?' + [regex]::Escape($EndMarker)
-        return [regex]::Replace($Content, $pattern, $NewBlock.TrimEnd("`r", "`n"))
+        $matches_ = [regex]::Matches($Content, $pattern)
+        if ($matches_.Count -gt 0) {
+            # 不能用 [regex]::Replace：取代字串中的 $_ / $1 / $& 等會被 .NET 展開，
+            # 區塊裡的 PowerShell 程式碼（如 Where-Object { $_ ... }）會把整份檔案再塞進去一次。
+            # 改用 Substring 手動拼接；若已有多個重複區塊，只保留第一個位置並移除其餘。
+            $block = $NewBlock.TrimEnd("`r", "`n")
+            $sb = New-Object System.Text.StringBuilder
+            $pos = 0
+            $first = $true
+            foreach ($m in $matches_) {
+                [void]$sb.Append($Content.Substring($pos, $m.Index - $pos))
+                if ($first) { [void]$sb.Append($block); $first = $false }
+                $pos = $m.Index + $m.Length
+            }
+            [void]$sb.Append($Content.Substring($pos))
+            return $sb.ToString()
+        }
     }
     if ([string]::IsNullOrEmpty($Content)) {
         return $NewBlock.TrimStart("`r", "`n")
@@ -129,7 +145,8 @@ $psEndMarker
 "@
 
 $psUpdated = Update-MarkedBlock -Content $psContent -StartMarker $psMarker -EndMarker $psEndMarker -NewBlock $psCode
-Set-Content -Path $psProfilePath -Value $psUpdated -Encoding UTF8
+# Set-Content 會自動補一個結尾換行，先去掉尾端換行，避免每次執行檔案多出一行空白
+Set-Content -Path $psProfilePath -Value $psUpdated.TrimEnd("`r", "`n") -Encoding UTF8
 if ($psExisted) {
     Write-Host "[PowerShell] 已更新 `$PROFILE 內的 venv 自動啟動區塊。" -ForegroundColor Green
 } else {
