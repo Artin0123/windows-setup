@@ -9,7 +9,7 @@ rem  Usage:
 rem    1) Drag one or more .cs files onto this file
 rem    2) Or on the command line: csc-build.cmd path\to\App.cs [more.cs...]
 rem    2b) In a terminal add /nopause first so it never waits for a key:
-rem        csc-build.cmd /nopause move_pi_sessions.cs   (or set CSC_NOPAUSE=1)
+rem        csc-build.cmd /nopause move-pi-sessions.cs   (or set CSC_NOPAUSE=1)
 rem    3) Optional first argument is the target type: exe | winexe | library
 rem       e.g. csc-build.cmd winexe App.cs Helper.cs
 rem
