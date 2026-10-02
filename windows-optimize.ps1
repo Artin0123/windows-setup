@@ -14,6 +14,5 @@ if (-not (Test-Path $folderPath)) { New-Item -Path $folderPath -Force | Out-Null
 Set-ItemProperty -Path $folderPath -Name "FolderType" -Value "NotSpecified" -Type String -Force
 Write-Host "[2/2] 已禁用文件夹自动发现" -ForegroundColor Green
 
-Write-Host "完成，正在重启资源管理器..." -ForegroundColor Yellow
-Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+Write-Host "完成。设置已写入，重新登录或新开窗口后完全生效。" -ForegroundColor Yellow
 Pause
