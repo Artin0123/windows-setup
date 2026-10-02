@@ -1,9 +1,6 @@
 # setup.ps1 - 一鍵安裝入口（支援 irm | iex）
 #
-#   私人 repo（測試）：
-#     $env:SETUP_TOKEN = '<github token>'
-#     irm -Headers @{ Authorization = "token $env:SETUP_TOKEN" } https://raw.githubusercontent.com/Artin0123/windows-setup/refs/heads/main/setup.ps1 | iex
-#   公開後：
+#   執行：
 #     irm https://raw.githubusercontent.com/Artin0123/windows-setup/refs/heads/main/setup.ps1 | iex
 #
 # 流程：
@@ -12,7 +9,6 @@
 #   3. 依序執行 venv.ps1、windows-optimize.ps1、windows-optimize-admin.ps1（hotkey 已併入 admin 腳本）
 #
 # 選用環境變數：
-#   SETUP_TOKEN   私人 repo 用的 GitHub token（也接受 GH_TOKEN / GITHUB_TOKEN）
 #   SETUP_STEPS   只跑部分步驟，逗號分隔：build,task,venv,optimize（預設全部）
 #   SETUP_BRANCH  分支名稱（預設 main）
 
@@ -22,7 +18,6 @@ function Invoke-WindowsSetup {
 
     $branch  = if ($env:SETUP_BRANCH) { $env:SETUP_BRANCH } else { 'main' }
     $baseUrl = "https://raw.githubusercontent.com/Artin0123/windows-setup/refs/heads/$branch"
-    $token   = @($env:SETUP_TOKEN, $env:GH_TOKEN, $env:GITHUB_TOKEN) | Where-Object { $_ } | Select-Object -First 1
     $steps   = if ($env:SETUP_STEPS) { $env:SETUP_STEPS -split '[,\s]+' | Where-Object { $_ } } else { @('build', 'task', 'venv', 'optimize') }
 
     $portableDir = Join-Path $env:USERPROFILE 'portable-exe'
@@ -40,13 +35,10 @@ function Invoke-WindowsSetup {
 
     function Get-Remote {
         param([string]$Name, [string]$Out)
-        $headers = @{}
-        if ($token) { $headers['Authorization'] = "token $token" }
         try {
-            Invoke-WebRequest -Uri "$baseUrl/$Name" -Headers $headers -OutFile $Out -UseBasicParsing
+            Invoke-WebRequest -Uri "$baseUrl/$Name" -OutFile $Out -UseBasicParsing
         } catch {
-            $hint = if (-not $token) { '（私人 repo 請設定 $env:SETUP_TOKEN）' } else { '' }
-            throw "下載失敗：$Name $hint $($_.Exception.Message)"
+            throw "下載失敗：$Name $($_.Exception.Message)"
         }
     }
 
