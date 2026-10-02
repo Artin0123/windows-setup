@@ -65,14 +65,15 @@ $bashrcPath = Join-Path $HOME ".bashrc"
 $bashInner = @'
 export TERM=xterm-256color
 export EDITOR=notepad.exe
+# 讓多個終端機視窗的歷史紀錄以「附加」的方式寫入，而不是互相覆蓋
+shopt -s histappend
+# 忽略重複指令、忽略開頭有空格的指令
+export HISTCONTROL=ignoreboth
 export MSYS_NO_PATHCONV=1
 '@ -replace "`r`n", "`n"
 
-$bashLegacy = @(
-    '(?m)^export TERM=xterm-256color[ \t]*(\n|\z)',
-    '(?m)^export EDITOR=notepad\.exe[ \t]*(\n|\z)',
-    '(?m)^export MSYS_NO_PATHCONV=1[ \t]*(\n|\z)'
-)
+# 舊版沒有標記的相同內容（逐行比對，找到就移除並收進區塊）
+$bashLegacy = @($bashInner.Trim("`n") -split "`n" | ForEach-Object { '(?m)^' + [regex]::Escape($_) + '[ \t]*(\n|\z)' })
 $bashOld = Read-Utf8Text $bashrcPath
 $bashNew = Set-ManagedBlock -Text $bashOld -StartMarker '# === SHELL_ENV_START ===' -EndMarker '# === SHELL_ENV_END ===' -Inner $bashInner -LegacyPatterns $bashLegacy
 if ($bashNew -ne $bashOld) {
@@ -80,6 +81,15 @@ if ($bashNew -ne $bashOld) {
     Write-Host "[Bash] 已更新 $bashrcPath 的環境變數區塊。" -ForegroundColor Green
 } else {
     Write-Host "[Bash] 環境變數區塊已是最新，跳過。" -ForegroundColor Yellow
+}
+
+# API key 放在區塊外：只在 .bashrc 完全沒有該變數時才補上空字串占位，已存在（含你填好的值）一律不動
+$bashCur = Read-Utf8Text $bashrcPath
+$missing = @('CONTEXT7_API_KEY', 'FIRECRAWL_API_KEY') | Where-Object { $bashCur -notmatch ('(?m)^\s*export\s+' + $_ + '=') }
+if ($missing) {
+    $add = ($missing | ForEach-Object { "export $_=`"`"" }) -join "`n"
+    [System.IO.File]::WriteAllText($bashrcPath, $bashCur.TrimEnd("`n") + "`n`n" + $add + "`n", $utf8NoBom)
+    Write-Host "[Bash] 已補上空白 API key 占位：$($missing -join ', ')（請自行填入）" -ForegroundColor Yellow
 }
 
 # ------------------------------------------------------------------------------
