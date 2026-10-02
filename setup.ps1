@@ -125,7 +125,7 @@ function Invoke-WindowsSetup {
         }
     }
 
-    # 編譯用的暫存檔不再需要（scripts 資料夾要留著：admin 腳本提權後的新視窗會再讀它）
+    # 編譯用的暫存檔不再需要
     Remove-Item $buildDir -Recurse -Force -ErrorAction SilentlyContinue
 
     $psExe = (Get-Process -Id $PID).Path     # 用目前這個 PowerShell 跑子腳本，$PROFILE 才會和你平常用的一致
