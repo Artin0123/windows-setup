@@ -46,7 +46,8 @@ $psEndMarker = "# === NATIVE_VENV_AUTO_ACTIVATE_END ==="
 if (-not (Test-Path (Split-Path $psProfilePath))) { New-Item -ItemType Directory -Force -Path (Split-Path $psProfilePath) | Out-Null }
 if (-not (Test-Path $psProfilePath)) { New-Item -ItemType File -Force -Path $psProfilePath | Out-Null }
 
-$psContent = Get-Content $psProfilePath -Raw -ErrorAction SilentlyContinue
+# 一律明確以 UTF-8 讀寫：Windows PowerShell 5.1 的 Get-Content 會把無 BOM 的 UTF-8 當 ANSI 讀，中文會變亂碼
+$psContent = [System.IO.File]::ReadAllText($psProfilePath, [System.Text.Encoding]::UTF8)
 $psExisted = $psContent -and $psContent -match [regex]::Escape($psMarker)
 
 $psCode = @"
@@ -145,8 +146,7 @@ $psEndMarker
 "@
 
 $psUpdated = Update-MarkedBlock -Content $psContent -StartMarker $psMarker -EndMarker $psEndMarker -NewBlock $psCode
-# Set-Content 會自動補一個結尾換行，先去掉尾端換行，避免每次執行檔案多出一行空白
-Set-Content -Path $psProfilePath -Value $psUpdated.TrimEnd("`r", "`n") -Encoding UTF8
+[System.IO.File]::WriteAllText($psProfilePath, $psUpdated.TrimEnd("`r", "`n") + "`r`n", (New-Object System.Text.UTF8Encoding($true)))
 if ($psExisted) {
     Write-Host "[PowerShell] 已更新 `$PROFILE 內的 venv 自動啟動區塊。" -ForegroundColor Green
 } else {
@@ -162,7 +162,7 @@ $bashEndMarker = "# === BASH_VENV_AUTO_ACTIVATE_END ==="
 
 if (-not (Test-Path $bashrcPath)) { New-Item -ItemType File -Force -Path $bashrcPath | Out-Null }
 
-$bashContent = Get-Content $bashrcPath -Raw -ErrorAction SilentlyContinue
+$bashContent = [System.IO.File]::ReadAllText($bashrcPath, [System.Text.Encoding]::UTF8)
 $bashExisted = $bashContent -and $bashContent -match [regex]::Escape($bashMarker)
 
 $bashCode = @'

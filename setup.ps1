@@ -6,11 +6,11 @@
 # 流程：
 #   1. 下載 csc-build.cmd 與 .cs，編譯成 exe
 #   2. 搬到 %USERPROFILE%\portable-exe（launcher 並註冊開機排程）與 %USERPROFILE%\scoop\shims（ffmpeg）
-#   3. 依序執行 venv.ps1、windows-optimize.ps1（皆不需管理員）
+#   3. 依序執行 shell-env.ps1、venv.ps1、windows-optimize.ps1（皆不需管理員）
 #   ※ 需要管理員的 windows-optimize-admin.ps1（含 hotkey）不在此流程，請另外執行，結尾會印出指令
 #
 # 選用環境變數：
-#   SETUP_STEPS   只跑部分步驟，逗號分隔：build,task,venv,optimize（預設全部）
+#   SETUP_STEPS   只跑部分步驟，逗號分隔：build,task,shell,venv,optimize（預設全部）
 #   SETUP_BRANCH  分支名稱（預設 main）
 
 function Invoke-WindowsSetup {
@@ -19,7 +19,7 @@ function Invoke-WindowsSetup {
 
     $branch  = if ($env:SETUP_BRANCH) { $env:SETUP_BRANCH } else { 'main' }
     $baseUrl = "https://raw.githubusercontent.com/Artin0123/windows-setup/refs/heads/$branch"
-    $steps   = if ($env:SETUP_STEPS) { $env:SETUP_STEPS -split '[,\s]+' | Where-Object { $_ } } else { @('build', 'task', 'venv', 'optimize') }
+    $steps   = if ($env:SETUP_STEPS) { $env:SETUP_STEPS -split '[,\s]+' | Where-Object { $_ } } else { @('build', 'task', 'shell', 'venv', 'optimize') }
 
     $portableDir = Join-Path $env:USERPROFILE 'portable-exe'
     $shimsDir    = Join-Path $env:USERPROFILE 'scoop\shims'
@@ -82,7 +82,7 @@ function Invoke-WindowsSetup {
 
     # ---------------------------------------------------------------- 1 + 2. 編譯並搬移
     if ($steps -contains 'build') {
-        Write-Host '=== [1/3] 編譯並搬移 exe ===' -ForegroundColor Cyan
+        Write-Host '=== [1/4] 編譯並搬移 exe ===' -ForegroundColor Cyan
 
         # csc-build.cmd 必須是「無 BOM + CRLF」：有 BOM 會讓第一行 @echo off 失效；LF 會讓 goto/label 解析異常
         $cmdPath = Join-Path $buildDir 'csc-build.cmd'
@@ -130,9 +130,17 @@ function Invoke-WindowsSetup {
 
     $psExe = (Get-Process -Id $PID).Path     # 用目前這個 PowerShell 跑子腳本，$PROFILE 才會和你平常用的一致
 
+    # ---------------------------------------------------------------- shell-env（.bashrc / $PROFILE 基本設定，可重複執行）
+    if ($steps -contains 'shell') {
+        Write-Host '=== [2/4] shell-env ===' -ForegroundColor Cyan
+        $shellEnv = Get-RemoteScript 'shell-env.ps1'
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File $shellEnv
+        if ($LASTEXITCODE -ne 0) { Write-Host "  [失敗] shell-env.ps1 結束碼 $LASTEXITCODE" -ForegroundColor Red }
+    }
+
     # ---------------------------------------------------------------- venv
     if ($steps -contains 'venv') {
-        Write-Host '=== [2/3] venv ===' -ForegroundColor Cyan
+        Write-Host '=== [3/4] venv ===' -ForegroundColor Cyan
         $venv = Get-RemoteScript 'venv.ps1'
         & $psExe -NoProfile -ExecutionPolicy Bypass -File $venv
         if ($LASTEXITCODE -ne 0) { Write-Host "  [失敗] venv.ps1 結束碼 $LASTEXITCODE" -ForegroundColor Red }
@@ -140,7 +148,7 @@ function Invoke-WindowsSetup {
 
     # ---------------------------------------------------------------- windows-optimize
     if ($steps -contains 'optimize') {
-        Write-Host '=== [3/3] windows-optimize ===' -ForegroundColor Cyan
+        Write-Host '=== [4/4] windows-optimize ===' -ForegroundColor Cyan
         $optA = Get-RemoteScript 'windows-optimize.ps1'    # 免管理員（結尾會重啟檔案總管並 Pause）
         & $psExe -NoProfile -ExecutionPolicy Bypass -File $optA
     }
