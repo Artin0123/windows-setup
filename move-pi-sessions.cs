@@ -1,5 +1,5 @@
 // ==========================================================================
-//  move_pi_sessions.cs — 批次搬移 pi 對話（session jsonl）到另一個專案，
+//  move-pi-sessions.cs — 批次搬移 pi 對話（session jsonl）到另一個專案，
 //                        並同步改寫檔頭 cwd。
 //
 //  編譯：把本檔拖到 csc-build.cmd 即可（不需要另外的 build 腳本）。
@@ -40,7 +40,7 @@ namespace MovePiSessions
         [STAThread]
         private static void Main(string[] args)
         {
-            // 編譯輔助：move_pi_sessions.exe --make-ico out.ico（csc-build.cmd 用來產生 exe 圖示）
+            // 編譯輔助：move-pi-sessions.exe --make-ico out.ico（csc-build.cmd 用來產生 exe 圖示）
             if (args != null && args.Length == 2 && args[0] == "--make-ico")
             {
                 AppIcon.WriteIco(args[1]);
