@@ -151,12 +151,12 @@ uiFontSize = 11
                     c.UiFontSize = f;
             }
 
-            // 舊版設定檔沒有字型欄位時補上
+            // 舊版設定檔沒有字型欄位時補上（沿用前面讀到的 raw，不重讀）
             if (!d.ContainsKey("uiFont") || !d.ContainsKey("uiFontSize"))
             {
                 try
                 {
-                    string text = File.ReadAllText(c.FilePath, Encoding.UTF8);
+                    string text = raw;
                     if (!d.ContainsKey("uiFont"))
                         text = UpsertStatic(text, "uiFont", c.UiFont);
                     if (!d.ContainsKey("uiFontSize"))
@@ -455,13 +455,35 @@ uiFontSize = 11
     // ------------------------------------------------------------- 路徑 / session
     internal static class PiPaths
     {
+        // group1 = "cwd": 前綴，group2 = 引號內的值（不含引號）
         private static readonly Regex CwdRe = new Regex(
-            "(\"cwd\"\\s*:\\s*)\"(?:\\\\.|[^\"\\\\])*\"",
+            "(\"cwd\"\\s*:\\s*)\"((?:\\\\.|[^\"\\\\])*)\"",
             RegexOptions.Compiled);
+        private static readonly Regex TypeRe = new Regex(
+            "\"type\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"",
+            RegexOptions.Compiled);
+        private static readonly Regex LeadSlashRe = new Regex(@"^[/\\]", RegexOptions.Compiled);
+        private static readonly Regex SepRe = new Regex(@"[/\\:]", RegexOptions.Compiled);
+        private static readonly Regex DriveRe = new Regex(@"^([A-Za-z])--(.*)$", RegexOptions.Compiled);
+        private static readonly Regex MultiSlashRe = new Regex(@"\\{2,}", RegexOptions.Compiled);
 
         private const int HeaderScanLines = 200;
-        private const int HeaderScanBytes = 512 * 1024;
+        // 單行長度上限（字元）。ReadHeader、MoveOne、RewriteHeaderCwd 共用這個上限，
+        // 超過的行一律跳過，所以三者看到的 header 範圍永遠一致
+        private const int HeaderMaxLineLength = 4 * 1024 * 1024;
         private static int _tmpSeq;
+        private static readonly int Pid = GetPid();
+        private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
+
+        private static int GetPid()
+        {
+            try
+            {
+                using (Process p = Process.GetCurrentProcess())
+                    return p.Id;
+            }
+            catch { return 0; }
+        }
 
         public static string DefaultSessionsRoot()
         {
@@ -476,14 +498,22 @@ uiFontSize = 11
             return Path.Combine(agent, "sessions");
         }
 
+        // 路徑比較用的 key；空字串或無效路徑回傳 null（不要用 == 直接比兩個 key，請用 SameKey）
         public static string PathKey(string p)
         {
-            if (string.IsNullOrEmpty(p)) return "";
+            if (string.IsNullOrEmpty(p)) return null;
             string s;
             try { s = Path.GetFullPath(p.Trim()); }
-            catch { return ""; }
-            s = s.ToLowerInvariant().TrimEnd('\\', '/');
-            return s;
+            catch { return null; }
+            return s.ToLowerInvariant().TrimEnd('\\', '/');
+        }
+
+        // 兩個路徑都有效且指向同一處才為 true（null-safe，兩個無效路徑不會被當成相等）
+        public static bool SameKey(string a, string b)
+        {
+            string ka = PathKey(a);
+            string kb = PathKey(b);
+            return ka != null && kb != null && ka == kb;
         }
 
         // 與 Python os.path.abspath 一致：去掉結尾斜線（磁碟機根目錄除外）
@@ -501,73 +531,197 @@ uiFontSize = 11
             string resolved;
             try { resolved = NormalizeCwd(cwd); }
             catch { resolved = cwd; }
-            resolved = Regex.Replace(resolved, @"^[/\\]", "");
-            return "--" + Regex.Replace(resolved, @"[/\\:]", "-") + "--";
+            resolved = LeadSlashRe.Replace(resolved, "");
+            return "--" + SepRe.Replace(resolved, "-") + "--";
         }
 
         public static bool LooksLikeSessionDirName(string name)
         {
-            return name != null
-                && name.Length > 4
-                && name.StartsWith("--")
-                && name.EndsWith("--");
+            if (name == null || name.Length <= 4
+                || !name.StartsWith("--", StringComparison.Ordinal)
+                || !name.EndsWith("--", StringComparison.Ordinal))
+                return false;
+            // 中間至少要有一個非 '-' 的字元（排除 "-----"）
+            for (int i = 2; i < name.Length - 2; i++)
+                if (name[i] != '-') return true;
+            return false;
         }
 
         public static string DecodeSessionDirName(string name)
         {
-            if (!LooksLikeSessionDirName(name)) return null;
-            string inner = name.Substring(2, name.Length - 4);
-            Match m = Regex.Match(inner, @"^([A-Za-z])--(.+)$");
-            if (!m.Success) return null;
-            return m.Groups[1].Value.ToUpperInvariant() + ":\\"
-                + m.Groups[2].Value.Replace('-', '\\');
+            bool inferred;
+            return DecodeSessionDirName(name, out inferred);
         }
 
-        public static Dictionary<string, object> ReadHeader(string path)
+        // 由 session 資料夾名稱還原 cwd。
+        // 編碼是有損的（\ / : 與名稱裡的 - 都變成 -），所以用檔案系統驗證：
+        // 每個 '-' 試「當分隔符」或「保留為名稱的一部分」，取第一個路徑真的存在的組合。
+        // inferred=false 代表已由檔案系統確認；true 代表只是把 '-' 全當 '\' 的推測結果（可能不準）。
+        public static string DecodeSessionDirName(string name, out bool inferred)
         {
-            string data;
-            try
-            {
-                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                using (StreamReader sr = new StreamReader(fs, Encoding.UTF8, true))
-                {
-                    char[] buf = new char[HeaderScanBytes];
-                    int n = sr.Read(buf, 0, buf.Length);
-                    data = new string(buf, 0, n);
-                }
-            }
-            catch { return null; }
+            inferred = true;
+            if (!LooksLikeSessionDirName(name)) return null;
+            string inner = name.Substring(2, name.Length - 4);
+            Match m = DriveRe.Match(inner);
+            if (!m.Success) return null;
 
-            string[] lines = data.Split('\n');
-            int limit = Math.Min(lines.Length, HeaderScanLines);
-            for (int i = 0; i < limit; i++)
+            string drive = m.Groups[1].Value.ToUpperInvariant() + ":\\";
+            string[] parts = m.Groups[2].Value.Split('-');
+            string best = drive;      // 檔案系統確認過、最深的一層
+            int bestIdx = 0;          // best 已用掉 parts 的前幾個
+            string found = ResolveByFs(drive, parts, 0, ref best, ref bestIdx);
+            if (found != null)
             {
-                string s = lines[i].Trim();
-                if (!s.StartsWith("{")) continue;
-                Dictionary<string, object> obj = TryParseLooseJson(s);
-                if (obj == null) continue;
-                object type;
-                if (obj.TryGetValue("type", out type)
-                    && type != null
-                    && string.Equals(type.ToString(), "session", StringComparison.Ordinal))
-                    return obj;
+                inferred = false;
+                return found;
+            }
+
+            // 退路：已確認的最深一層 + 剩下的片段全當分隔符（空片段略過，避免 C:\x\my\\app）
+            StringBuilder sb = new StringBuilder(best.TrimEnd('\\'));
+            for (int k = bestIdx; k < parts.Length; k++)
+                if (parts[k].Length > 0) sb.Append('\\').Append(parts[k]);
+            if (sb.Length == drive.Length - 1) sb.Append('\\');   // 磁碟機根目錄 "D:" -> "D:\"
+            if (bestIdx == 0 && sb.Length == drive.Length && Directory.Exists(drive)) inferred = false;
+            return sb.ToString();
+        }
+
+        // 由左到右回溯：parts[i..] 可合併成一個名稱（中間補回 '-'）；每一步都要求目錄真的存在。
+        // 走不通時 best / bestIdx 記下最深確認過的一層，給呼叫端組退路用
+        private static string ResolveByFs(string cur, string[] parts, int i, ref string best, ref int bestIdx)
+        {
+            if (i > bestIdx) { best = cur; bestIdx = i; }
+            if (i == parts.Length) return cur;
+            string seg = parts[i];
+            for (int j = i; j < parts.Length; j++)
+            {
+                if (j > i) seg = seg + "-" + parts[j];
+                if (seg.Length == 0) continue;   // 連續 '-' 造成的空片段，不是合法名稱
+                string next = cur.TrimEnd('\\') + "\\" + seg;
+                if (!Directory.Exists(next)) continue;
+                string r = ResolveByFs(next, parts, j + 1, ref best, ref bestIdx);
+                if (r != null) return r;
             }
             return null;
         }
 
-        private static Dictionary<string, object> TryParseLooseJson(string s)
+        private sealed class HeaderInfo
+        {
+            public long Start;                        // header 內容在檔案中的起點（已跳過 BOM）
+            public int ByteLength;                    // header 內容位元組數（不含 '\n'，含行尾 '\r'）
+            public string Line;                       // 解碼後的整行（不含 '\n'）
+            public bool ValidUtf8;                    // 該行是否為合法 UTF-8（否則不可安全改寫）
+            public Dictionary<string, object> Obj;
+        }
+
+        // 從串流開頭掃描 session header：最多 HeaderScanLines 行，單行超過 HeaderMaxLineLength 的略過。
+        // 以位元組逐行讀取，所以能回報 header 行的確切位元組範圍，供 MoveOne 原封不動複製其餘內容。
+        private static HeaderInfo ScanHeader(Stream s)
+        {
+            byte[] buf = new byte[16384];
+            int bufLen = 0, bufPos = 0;
+            long offset = 0;                               // bufPos 對應的檔案位置
+            MemoryStream line = new MemoryStream();
+            int maxBytes = HeaderMaxLineLength * 3;        // 一個字元最多 3 個位元組（BMP）
+            for (int lineNo = 0; lineNo < HeaderScanLines; lineNo++)
+            {
+                long lineStart = offset;
+                line.SetLength(0);
+                bool overflow = false, any = false;
+                while (true)
+                {
+                    if (bufPos == bufLen)
+                    {
+                        bufLen = s.Read(buf, 0, buf.Length);
+                        bufPos = 0;
+                        if (bufLen <= 0) { bufLen = 0; break; }
+                    }
+                    int nl = Array.IndexOf(buf, (byte)10, bufPos, bufLen - bufPos);
+                    int end = nl < 0 ? bufLen : nl;
+                    int take = end - bufPos;
+                    if (take > 0) any = true;
+                    if (!overflow)
+                    {
+                        if (line.Length + take > maxBytes) overflow = true;
+                        else line.Write(buf, bufPos, take);
+                    }
+                    offset += take;
+                    bufPos = end;
+                    if (nl >= 0)
+                    {
+                        bufPos++;
+                        offset++;
+                        any = true;
+                        break;
+                    }
+                }
+                if (!any) return null;   // 檔案結束
+                if (overflow) continue;
+
+                byte[] raw = line.GetBuffer();
+                int skip = 0;
+                if (lineStart == 0 && line.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF)
+                    skip = 3;
+                int len = (int)line.Length - skip;
+                string text = Encoding.UTF8.GetString(raw, skip, len);
+                if (text.Length > HeaderMaxLineLength) continue;
+
+                Dictionary<string, object> obj;
+                if (!TryParseSessionHeader(text, out obj)) continue;
+
+                HeaderInfo h = new HeaderInfo();
+                h.Start = lineStart + skip;
+                h.ByteLength = len;
+                h.Line = text;
+                h.Obj = obj;
+                try
+                {
+                    new UTF8Encoding(false, true).GetString(raw, skip, len);
+                    h.ValidUtf8 = true;
+                }
+                catch (ArgumentException) { h.ValidUtf8 = false; }
+                return h;
+            }
+            return null;
+        }
+
+        public static Dictionary<string, object> ReadHeader(string path)
         {
             try
             {
-                Match t = Regex.Match(s, "\"type\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
-                if (!t.Success) return null;
-                Dictionary<string, object> d = new Dictionary<string, object>(StringComparer.Ordinal);
-                d["type"] = UnescapeJson(t.Groups[1].Value);
-                Match c = Regex.Match(s, "\"cwd\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
-                if (c.Success) d["cwd"] = UnescapeJson(c.Groups[1].Value);
-                return d;
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    HeaderInfo h = ScanHeader(fs);
+                    return h == null ? null : h.Obj;
+                }
             }
             catch { return null; }
+        }
+
+        // 這一行是不是 type:session 的 JSON 物件行（寬鬆解析，只取 type / cwd）
+        private static bool TryParseSessionHeader(string line, out Dictionary<string, object> obj)
+        {
+            obj = null;
+            string s = line.Trim().TrimStart('\uFEFF');
+            if (s.Length == 0 || s[0] != '{') return false;
+            Dictionary<string, object> d = TryParseLooseJson(s);
+            if (d == null) return false;
+            object type;
+            if (!d.TryGetValue("type", out type) || type == null
+                || !string.Equals(type.ToString(), "session", StringComparison.Ordinal))
+                return false;
+            obj = d;
+            return true;
+        }
+
+        private static Dictionary<string, object> TryParseLooseJson(string s)
+        {
+            Match t = TypeRe.Match(s);
+            if (!t.Success) return null;
+            Dictionary<string, object> d = new Dictionary<string, object>(StringComparer.Ordinal);
+            d["type"] = UnescapeJson(t.Groups[1].Value);
+            Match c = CwdRe.Match(s);
+            if (c.Success) d["cwd"] = UnescapeJson(c.Groups[2].Value);
+            return d;
         }
 
         private static string UnescapeJson(string s)
@@ -637,22 +791,44 @@ uiFontSize = 11
             return sb.ToString();
         }
 
-        public static string DirExampleCwd(string dir)
+        // 資料夾內的 *.jsonl（依檔名排序）；讀不到回傳空陣列
+        private static string[] SortedJsonl(string dir)
         {
             try
             {
                 string[] files = Directory.GetFiles(dir, "*.jsonl");
                 Array.Sort(files, StringComparer.OrdinalIgnoreCase);
-                foreach (string f in files)
-                {
-                    Dictionary<string, object> h = ReadHeader(f);
-                    if (h == null) continue;
-                    object cwd;
-                    if (h.TryGetValue("cwd", out cwd) && cwd != null && cwd.ToString().Length > 0)
-                        return cwd.ToString();
-                }
+                return files;
             }
-            catch { }
+            catch { return new string[0]; }
+        }
+
+        // 依序列出資料夾內每個有 session header 的 jsonl 的 header
+        private static IEnumerable<Dictionary<string, object>> EnumerateHeaders(string dir)
+        {
+            foreach (string f in SortedJsonl(dir))
+            {
+                Dictionary<string, object> h = ReadHeader(f);
+                if (h != null) yield return h;
+            }
+        }
+
+        // 資料夾裡是否有 header 為 type:session 的 jsonl
+        public static bool HasSessionHeader(string dir)
+        {
+            foreach (Dictionary<string, object> h in EnumerateHeaders(dir))
+                return true;
+            return false;
+        }
+
+        public static string DirExampleCwd(string dir)
+        {
+            foreach (Dictionary<string, object> h in EnumerateHeaders(dir))
+            {
+                object cwd;
+                if (h.TryGetValue("cwd", out cwd) && cwd != null && cwd.ToString().Length > 0)
+                    return cwd.ToString();
+            }
             return null;
         }
 
@@ -673,40 +849,18 @@ uiFontSize = 11
         {
             List<string> dirs = ListSessionDirs(root);
             string want = EncodeSessionDirName(cwd);
-            List<string> exact = new List<string>();
+            List<string> byName = new List<string>();
             foreach (string d in dirs)
-                if (string.Equals(Path.GetFileName(d), want, StringComparison.Ordinal))
-                    exact.Add(d);
-            if (exact.Count > 0) return exact;
+                if (string.Equals(Path.GetFileName(d), want, StringComparison.OrdinalIgnoreCase))
+                    byName.Add(d);
+            if (byName.Count > 0) return byName;
 
-            string low = want.ToLowerInvariant();
-            List<string> ci = new List<string>();
-            foreach (string d in dirs)
-                if (string.Equals(Path.GetFileName(d).ToLowerInvariant(), low, StringComparison.Ordinal))
-                    ci.Add(d);
-            if (ci.Count > 0) return ci;
-
-            string key = PathKey(cwd);
+            // 名稱對不上：每個資料夾只看第一個有 cwd 的檔頭（同資料夾的對話 cwd 通常相同）
             List<string> hits = new List<string>();
             foreach (string d in dirs)
             {
-                try
-                {
-                    string[] files = Directory.GetFiles(d, "*.jsonl");
-                    Array.Sort(files, StringComparer.OrdinalIgnoreCase);
-                    foreach (string f in files)
-                    {
-                        Dictionary<string, object> h = ReadHeader(f);
-                        if (h == null) continue;
-                        object c;
-                        if (h.TryGetValue("cwd", out c) && PathKey(c == null ? "" : c.ToString()) == key)
-                        {
-                            hits.Add(d);
-                            break;
-                        }
-                    }
-                }
-                catch { }
+                string c = DirExampleCwd(d);
+                if (c != null && SameKey(c, cwd)) hits.Add(d);
             }
             return hits;
         }
@@ -714,13 +868,12 @@ uiFontSize = 11
         public static string FindTargetDir(string root, string cwd)
         {
             string want = EncodeSessionDirName(cwd);
-            string low = want.ToLowerInvariant();
             string ci = null;
             foreach (string d in ListSessionDirs(root))
             {
                 string name = Path.GetFileName(d);
                 if (string.Equals(name, want, StringComparison.Ordinal)) return d;
-                if (ci == null && string.Equals(name.ToLowerInvariant(), low, StringComparison.Ordinal))
+                if (ci == null && string.Equals(name, want, StringComparison.OrdinalIgnoreCase))
                     ci = d;
             }
             return ci != null ? ci : Path.Combine(root, want);
@@ -729,23 +882,15 @@ uiFontSize = 11
         public static List<string> CollectFiles(string sourceDir)
         {
             List<string> files = new List<string>();
-            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            try
+            foreach (string f in SortedJsonl(sourceDir))
             {
-                string[] all = Directory.GetFiles(sourceDir, "*.jsonl");
-                Array.Sort(all, StringComparer.OrdinalIgnoreCase);
-                foreach (string f in all)
-                {
-                    string name = Path.GetFileName(f);
-                    if (name.StartsWith(".tmp-", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (seen.Add(name)) files.Add(f);
-                }
+                if (Path.GetFileName(f).StartsWith(".tmp-", StringComparison.OrdinalIgnoreCase)) continue;
+                files.Add(f);
             }
-            catch { }
             return files;
         }
 
+        // 改寫 text 裡第一個 session header 行的 cwd（只動那一行；最多掃 HeaderScanLines 行）
         public static void RewriteHeaderCwd(string text, string newCwd,
             out string newText, out bool changed, out string note)
         {
@@ -758,16 +903,9 @@ uiFontSize = 11
             for (int i = 0; i < limit; i++)
             {
                 string line = lines[i];
-                string s = line.Trim();
-                if (!s.StartsWith("{") || s.IndexOf("\"type\"", StringComparison.Ordinal) < 0)
-                    continue;
-                Dictionary<string, object> obj = TryParseLooseJson(s);
-                if (obj == null) continue;
-                object type;
-                if (!obj.TryGetValue("type", out type)
-                    || type == null
-                    || !string.Equals(type.ToString(), "session", StringComparison.Ordinal))
-                    continue;
+                if (line.Length > HeaderMaxLineLength) continue;
+                Dictionary<string, object> obj;
+                if (!TryParseSessionHeader(line, out obj)) continue;
 
                 string newLine;
                 Match m = CwdRe.Match(line);
@@ -797,23 +935,22 @@ uiFontSize = 11
             note = "找不到 session header（檔案可能損壞）";
         }
 
-        public static void AtomicWriteText(string path, string text)
+        // 先寫到同資料夾的暫存檔再換名。overwrite=false 時 dst 已存在會丟 IOException（不覆蓋）；
+        // overwrite=true 且 dst 已存在時用 File.Replace，不會有「先刪後搬」目標檔消失的空窗
+        public static void AtomicWrite(string path, Action<Stream> write, bool overwrite)
         {
             int seq = Interlocked.Increment(ref _tmpSeq);
-            string dir = Path.GetDirectoryName(path);
-            string tmp = Path.Combine(dir,
-                ".tmp-" + ProcessId() + "-" + seq.ToString());
+            string tmp = Path.Combine(Path.GetDirectoryName(path),
+                ".tmp-" + Pid + "-" + seq.ToString());
             try
             {
                 using (FileStream fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-                using (StreamWriter sw = new StreamWriter(fs, new UTF8Encoding(false)))
                 {
-                    sw.Write(text);
-                    sw.Flush();
+                    write(fs);
                     fs.Flush(true);
                 }
-                if (File.Exists(path)) File.Delete(path);
-                File.Move(tmp, path);
+                if (overwrite && File.Exists(path)) File.Replace(tmp, path, null);
+                else File.Move(tmp, path);
             }
             finally
             {
@@ -822,38 +959,95 @@ uiFontSize = 11
             }
         }
 
-        private static int ProcessId()
+        private static void CopyBytes(Stream from, Stream to, long count)
         {
-            try { return Process.GetCurrentProcess().Id; }
-            catch { return 0; }
+            byte[] buf = new byte[81920];
+            while (count > 0)
+            {
+                int n = from.Read(buf, 0, (int)Math.Min(buf.Length, count));
+                if (n <= 0) throw new EndOfStreamException("來源檔案比預期短");
+                to.Write(buf, 0, n);
+                count -= n;
+            }
         }
 
+        // 搬移單一 jsonl：只重寫 header 那一行，其餘位元組原封不動串流複製（保留 BOM、非 UTF-8 位元組，
+        // 記憶體用量與檔案大小無關）。dst 已存在一律拒絕。回傳 null 表示成功，否則是錯誤說明。
         public static string MoveOne(string src, string dst, string newCwd)
         {
-            string original;
-            try { original = File.ReadAllText(src, Encoding.UTF8); }
+            string name = Path.GetFileName(dst);
+            if (File.Exists(dst)) return "目標已存在同名檔，略過：" + name;
+            if (PathKey(newCwd) == null) return "目標 cwd 不是有效路徑：" + newCwd;
+
+            // FileShare.Read：pi 正在寫入（已用寫入權限開啟）的檔案這裡會開失敗 → 拒絕搬移
+            FileStream fin;
+            try { fin = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.Read); }
             catch (Exception ex) { return "讀取失敗：" + ex.Message; }
 
-            string newText;
-            bool changed;
-            string note;
-            RewriteHeaderCwd(original, newCwd, out newText, out changed, out note);
-            if (note.StartsWith("找不到", StringComparison.Ordinal)
-                || note.StartsWith("session header 沒有", StringComparison.Ordinal))
-                return note;
-
-            try { AtomicWriteText(dst, changed ? newText : original); }
-            catch (Exception ex)
+            long expectedLen;
+            using (fin)
             {
-                return "寫入目標失敗（檔案可能正被 pi 使用）：" + ex.Message;
+                HeaderInfo h;
+                try { h = ScanHeader(fin); }
+                catch (Exception ex) { return "讀取失敗：" + ex.Message; }
+                if (h == null) return "找不到 session header（檔案可能損壞）";
+
+                string newLine;
+                bool changed;
+                string note;
+                RewriteHeaderCwd(h.Line, newCwd, out newLine, out changed, out note);
+                if (note.StartsWith("找不到", StringComparison.Ordinal)
+                    || note.StartsWith("session header 沒有", StringComparison.Ordinal))
+                    return note;
+
+                byte[] newBytes = null;
+                if (changed)
+                {
+                    if (!h.ValidUtf8)
+                        return "header 行含非 UTF-8 位元組，無法安全改寫，略過：" + name;
+                    newBytes = Utf8NoBom.GetBytes(newLine);
+                }
+
+                // 用記憶體中的新 header 驗證（不必寫完再重讀檔案）
+                Dictionary<string, object> check;
+                object cwdObj = null;
+                if (!TryParseSessionHeader(changed ? newLine : h.Line, out check)
+                    || !check.TryGetValue("cwd", out cwdObj)
+                    || !SameKey(cwdObj == null ? null : cwdObj.ToString(), newCwd))
+                    return "驗證失敗：" + name + " 新 header 的 cwd 不是目標路徑";
+
+                long srcLen = fin.Length;
+                expectedLen = changed ? srcLen - h.ByteLength + newBytes.Length : srcLen;
+                try
+                {
+                    AtomicWrite(dst, delegate(Stream fout)
+                    {
+                        fin.Position = 0;
+                        if (changed)
+                        {
+                            CopyBytes(fin, fout, h.Start);          // BOM 與 header 之前的位元組
+                            fout.Write(newBytes, 0, newBytes.Length);
+                            fin.Position = h.Start + h.ByteLength;
+                        }
+                        fin.CopyTo(fout);
+                    }, false);
+                }
+                catch (Exception ex)
+                {
+                    return "寫入目標失敗（檔案可能正被 pi 使用）：" + ex.Message;
+                }
             }
 
-            Dictionary<string, object> header = ReadHeader(dst);
-            object cwdObj = null;
-            if (header == null
-                || !header.TryGetValue("cwd", out cwdObj)
-                || PathKey(cwdObj == null ? "" : cwdObj.ToString()) != PathKey(newCwd))
-                return "寫入後驗證失敗：" + Path.GetFileName(dst) + " 的 cwd 不是目標路徑";
+            // 落盤後只檢查長度（內容是串流複製的，不需要重讀）
+            long dstLen = -1;
+            try { dstLen = new FileInfo(dst).Length; }
+            catch { }
+            if (dstLen != expectedLen)
+            {
+                try { File.Delete(dst); }
+                catch { }
+                return "寫入後驗證失敗：" + name + " 大小與預期不符，來源保留";
+            }
 
             try { File.Delete(src); }
             catch (Exception ex)
@@ -863,21 +1057,34 @@ uiFontSize = 11
             return null;
         }
 
-        // 判斷拖進來的是 session 資料夾（來源）還是一般專案路徑（目標）
+        // 判斷拖進來的是 session 資料夾（來源）還是一般專案路徑（目標）。
+        // session 資料夾 = 父資料夾就是 sessionsRoot，或裡面有 header 為 type:session 的 jsonl；
+        // 光看名稱像 --xxx-- 不算（專案資料夾也可能取這種名字）。
         public static void ClassifyDrop(string path, string sessionsRoot,
             out bool isSource, out string cwd, out string sessionDir)
+        {
+            bool inferred;
+            ClassifyDrop(path, sessionsRoot, out isSource, out cwd, out sessionDir, out inferred);
+        }
+
+        // inferred=true：cwd 只來自目錄名稱解碼，而且檔案系統無法確認（可能不準）
+        public static void ClassifyDrop(string path, string sessionsRoot,
+            out bool isSource, out string cwd, out string sessionDir, out bool inferred)
         {
             isSource = false;
             cwd = null;
             sessionDir = null;
+            inferred = false;
             if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) return;
 
             string full;
             try { full = Path.GetFullPath(path); }
             catch { return; }
 
-            string name = Path.GetFileName(full.TrimEnd('\\', '/'));
-            if (LooksLikeSessionDirName(name))
+            string trimmed = full.TrimEnd('\\', '/');
+            string name = Path.GetFileName(trimmed);
+            bool underRoot = SameKey(Path.GetDirectoryName(trimmed), sessionsRoot);
+            if (underRoot || HasSessionHeader(full))
             {
                 isSource = true;
                 sessionDir = full;
@@ -885,12 +1092,12 @@ uiFontSize = 11
                 if (!string.IsNullOrEmpty(got))
                     cwd = got;
                 else
-                    cwd = DecodeSessionDirName(name);
+                    cwd = DecodeSessionDirName(name, out inferred);
                 return;
             }
 
-            isSource = false;
-            cwd = full;
+            try { cwd = NormalizeCwd(full); }
+            catch { cwd = full; }
         }
     }
 
@@ -1062,7 +1269,7 @@ uiFontSize = 11
 
                 if (_pathValue.Length > 0 || pathW < 120)
                 {
-                    List<string> wrapped = WrapPath(display, _pathFont, pathW, g);
+                    List<string> wrapped = WrapPath(display, _pathFont, pathW, g, MaxPathLines);
                     if (wrapped.Count > MaxPathLines)
                     {
                         // 超過上限：保留前 MaxPathLines 行，最後一行尾端以 ... 取代
@@ -1109,24 +1316,25 @@ uiFontSize = 11
             return p.Replace('\\', '/');
         }
 
-        private static List<string> WrapPath(string text, Font font, int maxWidth, Graphics g)
+        // 依寬度換行；每行用二分搜尋找出放得下的最大字元數。
+        // 超過 maxLines 行就停止（多出來的行會被丟棄，不用算），所以最多回傳 maxLines + 1 行
+        private static List<string> WrapPath(string text, Font font, int maxWidth, Graphics g, int maxLines)
         {
             List<string> lines = new List<string>();
             if (string.IsNullOrEmpty(text)) return lines;
+            Size unbounded = new Size(int.MaxValue, int.MaxValue);
             int start = 0;
-            while (start < text.Length)
+            while (start < text.Length && lines.Count <= maxLines)
             {
-                int best = 0;
-                for (int len = 1; start + len <= text.Length; len++)
+                int lo = 1, hi = text.Length - start, best = 1;
+                while (lo <= hi)
                 {
-                    string chunk = text.Substring(start, len);
-                    Size sz = TextRenderer.MeasureText(g, chunk, font,
-                        new Size(int.MaxValue, int.MaxValue),
-                        TextFormatFlags.SingleLine);
-                    if (sz.Width <= maxWidth) best = len;
-                    else break;
+                    int mid = (lo + hi) / 2;
+                    Size sz = TextRenderer.MeasureText(g, text.Substring(start, mid), font,
+                        unbounded, TextFormatFlags.SingleLine);
+                    if (sz.Width <= maxWidth) { best = mid; lo = mid + 1; }
+                    else hi = mid - 1;
                 }
-                if (best <= 0) best = 1;
                 lines.Add(text.Substring(start, best));
                 start += best;
             }
@@ -1160,6 +1368,9 @@ uiFontSize = 11
         private string _sourceCwd;
         private string _sourceDir;   // 若直接選了 --C--... 資料夾
         private string _targetCwd;
+        private string _targetDir;   // 若直接拖入 --C--... 資料夾當目標：就搬進這個資料夾，不重新編碼
+        private bool _sourceInferred;   // cwd 只來自目錄名稱解碼（檔案系統無法確認）
+        private bool _targetInferred;
 
         private bool _working;
         private bool _clickArmed;
@@ -1307,10 +1518,16 @@ uiFontSize = 11
             _card.Hot = false;
         }
 
-        private void ClearSource()
+        private void ClearSourceState()
         {
             _sourceCwd = null;
             _sourceDir = null;
+            _sourceInferred = false;
+        }
+
+        private void ClearSource()
+        {
+            ClearSourceState();
             SyncPathRows();
             RefreshHint();
         }
@@ -1318,16 +1535,30 @@ uiFontSize = 11
         private void ClearTarget()
         {
             _targetCwd = null;
+            _targetDir = null;
+            _targetInferred = false;
             SyncPathRows();
             RefreshHint();
         }
 
+        // 選到 sessions 根目錄本身不是有效的專案路徑或 session 資料夾，直接警告
+        private bool RejectSessionsRoot(string path)
+        {
+            if (!PiPaths.SameKey(path, _cfg.ResolveSessionsRoot())) return false;
+            MessageBox.Show(this,
+                "這是 pi 的 sessions 根目錄本身，不是專案路徑，也不是單一 session 資料夾。\r\n"
+                + "請改選專案資料夾，或 sessions 底下的 --...-- 資料夾。",
+                Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return true;
+        }
+
         private void AssignSourceFromPath(string path, bool tryRun, string reason)
         {
-            bool isSession;
+            if (RejectSessionsRoot(path)) return;
+            bool isSession, inferred;
             string cwd, sessionDir;
             PiPaths.ClassifyDrop(path, _cfg.ResolveSessionsRoot(),
-                out isSession, out cwd, out sessionDir);
+                out isSession, out cwd, out sessionDir, out inferred);
 
             if (isSession)
             {
@@ -1339,6 +1570,7 @@ uiFontSize = 11
                 }
                 _sourceCwd = cwd;
                 _sourceDir = sessionDir;
+                _sourceInferred = inferred;
             }
             else
             {
@@ -1350,6 +1582,7 @@ uiFontSize = 11
                     return;
                 }
                 _sourceDir = null;
+                _sourceInferred = false;
             }
 
             SyncPathRows();
@@ -1360,12 +1593,36 @@ uiFontSize = 11
 
         private void AssignTargetFromPath(string path, bool tryRun, string reason)
         {
-            try { _targetCwd = PiPaths.NormalizeCwd(path); }
-            catch (Exception ex)
+            // 若拖進來的是 sessions 底下的 --C--...-- 資料夾，要還原成真正的專案 cwd，
+            // 否則會把 session 資料夾的完整路徑再編碼一次（產生巢狀錯誤目錄名）
+            if (RejectSessionsRoot(path)) return;
+            bool isSession, inferred;
+            string sessCwd, sessionDir;
+            PiPaths.ClassifyDrop(path, _cfg.ResolveSessionsRoot(),
+                out isSession, out sessCwd, out sessionDir, out inferred);
+            if (isSession)
             {
-                MessageBox.Show(this, "路徑無效：\r\n" + ex.Message,
-                    Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                if (string.IsNullOrEmpty(sessCwd))
+                {
+                    MessageBox.Show(this, "無法從這個 session 資料夾解析目標 cwd。",
+                        Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                _targetCwd = sessCwd;
+                _targetDir = sessionDir;
+                _targetInferred = inferred;
+            }
+            else
+            {
+                try { _targetCwd = PiPaths.NormalizeCwd(path); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "路徑無效：\r\n" + ex.Message,
+                        Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                _targetDir = null;
+                _targetInferred = false;
             }
             SyncPathRows();
             RefreshHint();
@@ -1375,6 +1632,7 @@ uiFontSize = 11
 
         private void ApplyDropToNextSlot(string path, bool tryRun)
         {
+            if (_working) return;
             if (string.IsNullOrEmpty(_sourceCwd))
                 AssignSourceFromPath(path, tryRun, "已設定來源");
             else if (string.IsNullOrEmpty(_targetCwd))
@@ -1471,7 +1729,9 @@ uiFontSize = 11
                 if (Directory.Exists(f)) { dir = Path.GetFullPath(f); break; }
             }
             if (dir == null) return;
-            ApplyDropToNextSlot(dir, true);
+            // 不要在 OLE 拖放回呼裡直接跳對話框或跑搬移（會卡住拖曳來源）
+            string d = dir;
+            BeginInvoke(new Action(delegate { ApplyDropToNextSlot(d, true); }));
         }
 
         // ------------------------------------------------------------ 齒輪 = move-pi-sessions-config.ini
@@ -1513,7 +1773,7 @@ uiFontSize = 11
             if (string.IsNullOrEmpty(_sourceCwd) || string.IsNullOrEmpty(_targetCwd))
                 return;
 
-            if (PiPaths.PathKey(_sourceCwd) == PiPaths.PathKey(_targetCwd))
+            if (PiPaths.SameKey(_sourceCwd, _targetCwd))
             {
                 MessageBox.Show(this, "來源與目標是同一個路徑，不需要搬移。",
                     Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1555,17 +1815,19 @@ uiFontSize = 11
                 }
             }
 
-            string tgtDir = PiPaths.FindTargetDir(sessionsRoot, _targetCwd);
+            // 目標是直接拖入的 session 資料夾、且還在 → 就用它，不要依 cwd 重新編碼
+            string tgtDir = (!string.IsNullOrEmpty(_targetDir) && Directory.Exists(_targetDir))
+                ? _targetDir
+                : PiPaths.FindTargetDir(sessionsRoot, _targetCwd);
             string newCwd = _targetCwd;
             if (Directory.Exists(tgtDir))
             {
                 string borrowed = PiPaths.DirExampleCwd(tgtDir);
-                if (!string.IsNullOrEmpty(borrowed)
-                    && PiPaths.PathKey(borrowed) == PiPaths.PathKey(_targetCwd))
+                if (!string.IsNullOrEmpty(borrowed) && PiPaths.SameKey(borrowed, _targetCwd))
                     newCwd = borrowed;
             }
 
-            if (PiPaths.PathKey(srcDir) == PiPaths.PathKey(tgtDir))
+            if (PiPaths.SameKey(srcDir, tgtDir))
             {
                 MessageBox.Show(this, "來源與目標是同一個 session 目錄，不需要搬移。",
                     Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1595,11 +1857,20 @@ uiFontSize = 11
                 return;
             }
 
+            string warn = "";
+            if (_sourceInferred)
+                warn += "注意：來源 cwd 只是由目錄名稱推測，可能不準。\r\n";
+            if (_targetInferred)
+                warn += "注意：目標 cwd 只是由目錄名稱推測，可能不準（會寫進對話檔頭）。\r\n";
+            if (warn.Length > 0) warn += "\r\n";
+
             string msg =
                 (string.IsNullOrEmpty(reason) ? "" : reason + "\r\n\r\n")
+                + warn
                 + "來源 cwd：\r\n  " + _sourceCwd + "\r\n\r\n"
                 + "目標 cwd：\r\n  " + newCwd + "\r\n\r\n"
                 + "來源目錄：\r\n  " + Path.GetFileName(srcDir) + "\r\n\r\n"
+                + "目標目錄：\r\n  " + Path.GetFileName(tgtDir) + "\r\n\r\n"
                 + "待搬對話：" + files.Count + " 個\r\n\r\n"
                 + "確定要搬移？";
 
@@ -1664,84 +1935,97 @@ uiFontSize = 11
 
         private void RunMove(string srcDir, string tgtDir, string newCwd, List<string> files)
         {
-            _working = true;
-            _hint.Text = "搬移中…";
-            _hint.ForeColor = CAccent;
-            Application.DoEvents();
+            string summary;
+            MessageBoxIcon icon = MessageBoxIcon.Information;
 
-            bool createdTgt = !Directory.Exists(tgtDir);
-            try { Directory.CreateDirectory(tgtDir); }
-            catch (Exception ex)
+            _working = true;
+            try
+            {
+                _hint.Text = "搬移中…";
+                _hint.ForeColor = CAccent;
+                Application.DoEvents();
+
+                bool createdTgt = !Directory.Exists(tgtDir);
+                try
+                {
+                    Directory.CreateDirectory(tgtDir);
+                    summary = null;
+                }
+                catch (Exception ex)
+                {
+                    summary = "無法建立目標目錄：\r\n" + ex.Message;
+                    icon = MessageBoxIcon.Error;
+                }
+
+                if (summary == null)
+                {
+                    int ok = 0;
+                    List<string> failed = new List<string>();
+                    foreach (string f in files)
+                    {
+                        string dest = Path.Combine(tgtDir, Path.GetFileName(f));
+                        string err = PiPaths.MoveOne(f, dest, newCwd);
+                        if (err == null) ok++;
+                        else failed.Add(Path.GetFileName(f) + "：" + err);
+                    }
+
+                    bool removedSrc = false;
+                    try
+                    {
+                        if (ok > 0 && Directory.Exists(srcDir)
+                            && Directory.GetFileSystemEntries(srcDir).Length == 0)
+                        {
+                            Directory.Delete(srcDir);
+                            removedSrc = true;
+                        }
+                    }
+                    catch { }
+
+                    if (createdTgt && ok == 0)
+                    {
+                        try
+                        {
+                            if (Directory.Exists(tgtDir)
+                                && Directory.GetFileSystemEntries(tgtDir).Length == 0)
+                                Directory.Delete(tgtDir);
+                        }
+                        catch { }
+                    }
+
+                    // 全部搬完才清空來源（有失敗的話保留，讓使用者處理後可直接重試）
+                    if (ok > 0 && failed.Count == 0)
+                        ClearSourceState();
+
+                    StringBuilder sb = new StringBuilder();
+                    sb.AppendLine("完成：成功 " + ok + " 個，失敗 " + failed.Count + " 個");
+                    sb.AppendLine();
+                    sb.AppendLine("新位置：");
+                    sb.AppendLine(tgtDir);
+                    if (removedSrc)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("來源目錄已清空並移除。");
+                    }
+                    if (failed.Count > 0)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("失敗清單：");
+                        foreach (string line in failed) sb.AppendLine("  " + line);
+                    }
+                    sb.AppendLine();
+                    sb.Append("在目標路徑底下執行 pi 即可看到這些對話。");
+                    summary = sb.ToString();
+                    if (failed.Count > 0) icon = MessageBoxIcon.Warning;
+                }
+            }
+            finally
             {
                 _working = false;
                 SyncPathRows();
                 RefreshHint();
-                MessageBox.Show(this, "無法建立目標目錄：\r\n" + ex.Message,
-                    Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
             }
 
-            int ok = 0;
-            List<string> failed = new List<string>();
-            foreach (string f in files)
-            {
-                string dest = Path.Combine(tgtDir, Path.GetFileName(f));
-                string err = PiPaths.MoveOne(f, dest, newCwd);
-                if (err == null) ok++;
-                else failed.Add(Path.GetFileName(f) + "：" + err);
-            }
-
-            bool removedSrc = false;
-            try
-            {
-                if (ok > 0 && Directory.Exists(srcDir)
-                    && Directory.GetFileSystemEntries(srcDir).Length == 0)
-                {
-                    Directory.Delete(srcDir);
-                    removedSrc = true;
-                    if (PiPaths.PathKey(srcDir) == PiPaths.PathKey(_sourceDir))
-                        _sourceDir = null;
-                }
-            }
-            catch { }
-
-            if (createdTgt && ok == 0)
-            {
-                try
-                {
-                    if (Directory.Exists(tgtDir)
-                        && Directory.GetFileSystemEntries(tgtDir).Length == 0)
-                        Directory.Delete(tgtDir);
-                }
-                catch { }
-            }
-
-            _working = false;
-            SyncPathRows();
-            RefreshHint();
-
-            StringBuilder sb = new StringBuilder();
-            sb.AppendLine("完成：成功 " + ok + " 個，失敗 " + failed.Count + " 個");
-            sb.AppendLine();
-            sb.AppendLine("新位置：");
-            sb.AppendLine(tgtDir);
-            if (removedSrc)
-            {
-                sb.AppendLine();
-                sb.AppendLine("來源目錄已清空並移除。");
-            }
-            if (failed.Count > 0)
-            {
-                sb.AppendLine();
-                sb.AppendLine("失敗清單：");
-                foreach (string line in failed) sb.AppendLine("  " + line);
-            }
-            sb.AppendLine();
-            sb.Append("在目標路徑底下執行 pi 即可看到這些對話。");
-
-            MessageBox.Show(this, sb.ToString(), Text,
-                MessageBoxButtons.OK,
-                failed.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            MessageBox.Show(this, summary, Text, MessageBoxButtons.OK, icon);
         }
     }
 
