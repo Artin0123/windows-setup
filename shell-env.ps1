@@ -85,7 +85,7 @@ if ($bashNew -ne $bashOld) {
 
 # API key 放在區塊外：只在 .bashrc 完全沒有該變數時才補上空字串占位，已存在（含你填好的值）一律不動
 $bashCur = Read-Utf8Text $bashrcPath
-$missing = @('CONTEXT7_API_KEY', 'FIRECRAWL_API_KEY') | Where-Object { $bashCur -notmatch ('(?m)^\s*export\s+' + $_ + '=') }
+$missing = @('FIRECRAWL_API_KEY') | Where-Object { $bashCur -notmatch ('(?m)^\s*export\s+' + $_ + '=') }
 if ($missing) {
     $add = ($missing | ForEach-Object { "export $_=`"`"" }) -join "`n"
     [System.IO.File]::WriteAllText($bashrcPath, $bashCur.TrimEnd("`n") + "`n`n" + $add + "`n", $utf8NoBom)
