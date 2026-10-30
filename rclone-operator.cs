@@ -798,17 +798,8 @@ consoleFontSize = 11
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
             Color c = ForeColor;
 
-            RectangleF box = new RectangleF(1, 1, Width - 3, Height - 3);
-            using (GraphicsPath p = Gfx.Round(box, 16))
-            {
-                using (SolidBrush fb = new SolidBrush(Color.FromArgb(16, c)))
-                    g.FillPath(fb, p);
-                using (Pen pen = new Pen(Color.FromArgb(120, c), 2f))
-                {
-                    pen.DashStyle = DashStyle.Dash;
-                    g.DrawPath(pen, p);
-                }
-            }
+            using (SolidBrush fb = new SolidBrush(Color.FromArgb(16, c)))
+                g.FillRectangle(fb, 0, 0, Width, Height);
 
             string text = Text ?? "";
             int sep = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
@@ -1241,7 +1232,7 @@ consoleFontSize = 11
 
         private readonly RichTextBox _console;
         private readonly DropZone _hint;
-        private readonly RoundedPanel _card;
+        private readonly Panel _card;
         private readonly GearButton _gear;
         private readonly Config _cfg;
         private readonly RcloneRunner _rclone;
@@ -1262,7 +1253,6 @@ consoleFontSize = 11
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(900, 540);
             MinimumSize = new Size(640, 380);
-            Padding = new Padding(16);
             BackColor = CForm;
             ForeColor = CText;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
@@ -1281,11 +1271,9 @@ consoleFontSize = 11
             Font = Theme.Ui(1f, FontStyle.Regular);
             _rclone = new RcloneRunner(_cfg, this);
 
-            _card = new RoundedPanel();
+            _card = new Panel();
             _card.Dock = DockStyle.Fill;
-            _card.Fill = CConsole;
-            _card.Radius = 14;
-            _card.Padding = new Padding(16, 14, 12, 14);
+            _card.BackColor = CConsole;
             _card.AllowDrop = true;
 
             _console = new RichTextBox();
@@ -1314,7 +1302,7 @@ consoleFontSize = 11
             _card.Controls.Add(_hint);
             Controls.Add(_card);
 
-            // 右上角齒輪（在虛線框內）：開啟 rclone-config.ini 所在位置
+            // 右上角齒輪：開啟 rclone-config.ini 所在位置
             _gear = new GearButton();
             _gear.Size = new Size(34, 34);
             _gear.Anchor = AnchorStyles.Top | AnchorStyles.Right;
@@ -1323,8 +1311,8 @@ consoleFontSize = 11
             new ToolTip().SetToolTip(_gear, "開啟設定檔所在位置並選取 " + Config.FileName);
             _card.Controls.Add(_gear);
             _gear.BringToFront();
-            _card.Resize += delegate { _gear.Location = new Point(_card.Width - _gear.Width - 46, 36); };
-            _gear.Location = new Point(_card.Width - _gear.Width - 46, 36);
+            _card.Resize += delegate { _gear.Location = new Point(_card.Width - _gear.Width - 16, 16); };
+            _gear.Location = new Point(_card.Width - _gear.Width - 16, 16);
             // 只在選擇（拖曳提示）畫面顯示；進入終端畫面就隱藏，回到提示畫面會再出現
             _gear.Visible = _hint.Visible;
             _hint.VisibleChanged += delegate { _gear.Visible = _hint.Visible; };
