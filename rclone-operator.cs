@@ -7,7 +7,7 @@
 //  （依檔案最上方的 csc-variant 標記）；沒定義任何模式時預設為 MODE_TRANSFER。
 //  另可用 build.ps1 編譯兩次：
 //      /define:MODE_TRANSFER  ->  rclone-transfer.exe （上傳 / 下載 自動判斷）
-//      /define:MODE_DELETE    ->  rclone-delete.exe   （從雲端刪除）
+//      /define:MODE_DELETE    ->  rclone-delete.exe   （從遠端刪除）
 //
 //  注意：Windows 內建 csc.exe 是 C# 5 編譯器，
 //        因此這裡不使用 $"..."、?.、nameof 等 C# 6 以上語法。
@@ -99,7 +99,7 @@ namespace RcloneDrop
 
         public string FilePath = "";
         public string Remote = "";
-        public string CloudDrives = "d";
+        public string RemoteDrives = "d";
         public string LocalDrives = "c";
         public string DownloadDir = @"%USERPROFILE%\Downloads\Rclone";
         public string UploadDir = "";
@@ -132,12 +132,12 @@ namespace RcloneDrop
 ; 留空時第一次使用會跳出選單，選完會自動寫回這裡，之後不用再選
 remote =
 
-; 雲端槽位：rclone mount 掛載的磁碟代號，逗號可指定多個，大小寫不拘
-; 例如 cloud = d,e
-cloud = d
+; 遠端槽位：rclone remote 掛載到本機的磁碟代號，逗號可指定多個，大小寫不拘
+; 例如 remoteDrives = d,e
+remoteDrives = d
 
-; 本地槽位：例如 local = c,d 代表 C 槽與 D 槽都是本機
-local = c
+; 本地槽位：本機實際的磁碟代號，例如 localDrives = c,d 代表 C 槽與 D 槽都是本機
+localDrives = c
 
 ; 下載目的地（支援 %USERPROFILE% 這類環境變數）
 downloadDir = %USERPROFILE%\Downloads\Rclone
@@ -229,8 +229,8 @@ consoleFontSize = 11
             }
 
             c.Remote = GetStr(d, "remote", c.Remote);
-            c.CloudDrives = GetStr(d, "cloud", c.CloudDrives);
-            c.LocalDrives = GetStr(d, "local", c.LocalDrives);
+            c.RemoteDrives = GetStr(d, "remoteDrives", GetStr(d, "cloud", c.RemoteDrives));   // 舊 key：cloud
+            c.LocalDrives = GetStr(d, "localDrives", GetStr(d, "local", c.LocalDrives));      // 舊 key：local
             c.DownloadDir = GetStr(d, "downloadDir", c.DownloadDir);
             c.UploadDir = GetStr(d, "uploadDir", c.UploadDir);
             c.RclonePath = GetStr(d, "rclonePath", c.RclonePath);
@@ -325,8 +325,8 @@ consoleFontSize = 11
         public const string Default = "127.0.0.1:5572";
 
         // 從執行中的 rclone mount 命令列找 --rc-addr。找不到回傳 null。
-        // 有多個換載時，優先選換載位置是雲端槽位的那一個。
-        public static string Find(HashSet<char> cloudDrives)
+        // 有多個掛載時，優先選掛載位置是遠端槽位的那一個。
+        public static string Find(HashSet<char> remoteDrives)
         {
             List<string> cmds = new List<string>();
             try
@@ -356,9 +356,9 @@ consoleFontSize = 11
                 else addr = "localhost:5572";
 
                 if (any == null) any = addr;
-                if (matched == null && cloudDrives != null)
+                if (matched == null && remoteDrives != null)
                 {
-                    foreach (char d in cloudDrives)
+                    foreach (char d in remoteDrives)
                     {
                         if (Regex.IsMatch(c, @"(^|[\s""'])" + d + @":(?=[\s""'\\]|$)", RegexOptions.IgnoreCase))
                         { matched = addr; break; }
@@ -493,7 +493,6 @@ consoleFontSize = 11
         public string RefreshDir = "/";   // 完成後要刷新的遠端目錄
         public string Direction = "";     // 上傳 / 下載 / 刪除
         public string Describe = "";
-        public string ConfirmMessage = ""; // 非空表示執行前要再問一次
     }
 
     // ------------------------------------------------------------ rclone 執行
@@ -1115,7 +1114,7 @@ consoleFontSize = 11
             tip.Height = 96;
             tip.Padding = new Padding(2, 10, 2, 8);
             tip.ForeColor = Color.FromArgb(200, 200, 205);
-            tip.Text = "請選擇要使用的雲端遠端\r\n（選定後會寫入設定檔，之後不用再選）";
+            tip.Text = "請選擇要使用的 rclone 遠端\r\n（選定後會寫入設定檔，之後不用再選）";
 
             RoundedPanel listCard = new RoundedPanel();
             listCard.Dock = DockStyle.Fill;
@@ -1212,15 +1211,15 @@ consoleFontSize = 11
         private const string Title = "Rclone Transfer　上傳 / 下載";
         private const string HintIdle =
             "將檔案或資料夾拖曳到這個視窗\r\n\r\n" +
-            "本地槽位的項目　→　上傳到雲端\r\n" +
-            "雲端槽位的項目　→　下載到本機\r\n\r\n" +
+            "本地槽位的項目　→　上傳到遠端\r\n" +
+            "遠端槽位的項目　→　下載到本機\r\n\r\n" +
             "也可以直接把檔案拖到 rclone-transfer.exe 的圖示上";
         private const string HintOver = "放開滑鼠即可開始傳輸";
 #else
-        private const string Title = "Rclone Delete　雲端刪除";
+        private const string Title = "Rclone Delete　遠端刪除";
         private const string HintIdle =
-            "將「雲端硬碟」中的檔案或資料夾\r\n拖曳到這個視窗\r\n\r\n" +
-            "[!] 會直接從雲端永久刪除\r\n　　不會經過 Windows 資源回收筒";
+            "將「遠端磁碟」中的檔案或資料夾\r\n拖曳到這個視窗\r\n\r\n" +
+            "[!] 會直接從遠端永久刪除\r\n　　不會經過 Windows 資源回收筒";
         private const string HintOver = "放開滑鼠以選取要刪除的項目";
 #endif
 
@@ -1240,6 +1239,8 @@ consoleFontSize = 11
         private readonly object _sync = new object();
 
         private bool _working;
+        private ManualResetEvent _confirmState;   // 非 null 表示正在等「按 Enter」確認
+        private bool? _confirmResult;
         private int _progressStart = -1;
         private bool _headerShown;
         private Font _fontAscii;
@@ -1394,12 +1395,70 @@ consoleFontSize = 11
 
         private void OnKeyDown(object sender, KeyEventArgs e)
         {
+            if (_confirmState != null)
+            {
+                if (e.KeyCode == Keys.Enter)                    // Enter：執行
+                {
+                    ManualResetEvent ok = _confirmState;
+                    _confirmResult = true;
+                    _confirmState = null;
+                    if (ok != null) ok.Set();
+                }
+                else if (e.KeyCode == Keys.Escape)              // Esc：取消並提示
+                {
+                    ManualResetEvent vm = _confirmState;
+                    _confirmResult = false;
+                    _confirmState = null;
+                    if (vm != null) vm.Set();
+                    Write("　已取消。", OutKind.Warn);
+                }
+                else e.SuppressKeyPress = true;                 // 其餘按鍵忽略
+                e.Handled = true;
+                return;
+            }
             if (e.KeyCode == Keys.Escape) { Close(); e.Handled = true; return; }   // Esc：關閉（處理中會先確認）
             if (e.KeyCode == Keys.Enter && _console.Visible && !_working)
             {
                 ShowMain();                        // Enter：終端畫面回到主畫面
                 e.Handled = true;
             }
+        }
+
+        // 終端畫面確認：印出內容後等 Enter（Esc 取消），取代彈窗。
+        // 由 worker 執行緒呼叫，結果由 OnKeyDown 送回。
+        private bool AskConfirm(string title, string message)
+        {
+            ManualResetEvent ev = new ManualResetEvent(false);
+            _confirmResult = null;
+            _confirmState = ev;
+            Ui(delegate
+            {
+                if (_hint.Visible)
+                {
+                    _hint.Visible = false;
+                    _console.Visible = true;
+                    if (!_headerShown) { _headerShown = true; PrintHeader(); }
+                }
+                Write("", OutKind.Normal);
+                Write("[?] " + title, OutKind.Warn);
+                foreach (string line in (message ?? "").Replace("\r\n", "\n").Split('\n'))
+                    if (line.Length > 0) Write("　" + line, OutKind.Normal);
+                Write("　[?] 按 Enter 執行，Esc 取消…", OutKind.Dim);
+                try { _console.Focus(); } catch { }
+                try { Activate(); } catch { }
+            });
+            while (!ev.WaitOne(250))
+            {
+                bool gone;
+                try { gone = IsDisposed || !IsHandleCreated; } catch { gone = true; }
+                if (gone) break;
+            }
+            bool? res = _confirmResult;
+            _confirmState = null;
+            _confirmResult = null;
+            ev.Set();
+            ev.Close();
+            return res == true;
         }
 
         private void ShowMain()
@@ -1489,7 +1548,7 @@ consoleFontSize = 11
             string remote = ResolveRemote();
             if (remote == null) { Write("已取消。", OutKind.Warn); return; }
 
-            HashSet<char> cloud = Config.ParseDrives(_cfg.CloudDrives);
+            HashSet<char> remoteDrives = Config.ParseDrives(_cfg.RemoteDrives);
             HashSet<char> local = Config.ParseDrives(_cfg.LocalDrives);
 
             List<Plan> plans = new List<Plan>();
@@ -1497,7 +1556,7 @@ consoleFontSize = 11
             {
                 Plan plan;
                 string err;
-                if (TryPlan(p, remote, cloud, local, out plan, out err)) plans.Add(plan);
+                if (TryPlan(p, remote, remoteDrives, local, out plan, out err)) plans.Add(plan);
                 else Write("[X] " + err, OutKind.Err);
             }
             if (plans.Count == 0) return;
@@ -1509,16 +1568,6 @@ consoleFontSize = 11
             int ok = 0, fail = 0;
             foreach (Plan plan in plans)
             {
-                if (plan.ConfirmMessage.Length > 0)
-                {
-                    Plan cur = plan;
-                    bool yes = UiSync(delegate
-                    {
-                        return MessageBox.Show(this, cur.ConfirmMessage, "請確認",
-                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
-                    });
-                    if (!yes) { Write("  已略過：" + cur.Name, OutKind.Warn); continue; }
-                }
                 if (Execute(plan)) ok++; else fail++;
             }
 
@@ -1578,7 +1627,7 @@ consoleFontSize = 11
             {
                 if (_rcAddrCache == null)
                 {
-                    string found = RcDetect.Find(Config.ParseDrives(_cfg.CloudDrives));
+                    string found = RcDetect.Find(Config.ParseDrives(_cfg.RemoteDrives));
                     _rcAddrCache = found ?? RcDetect.Default;
                     Write(found != null
                         ? " 自動偵測到 RC 位址：" + _rcAddrCache
@@ -1651,7 +1700,7 @@ consoleFontSize = 11
                 return _remote;
             }
 
-            Write(" rclone-config.ini 還沒指定 remote，正在讀取可用的雲端清單…", OutKind.Normal);
+            Write(" rclone-config.ini 還沒指定 remote，正在讀取可用的遠端清單…", OutKind.Normal);
             List<string> remotes = _rclone.ListRemotes();
             if (remotes.Count == 0)
                 Write(" [!] rclone listremotes 沒有回傳任何遠端，請手動輸入名稱。", OutKind.Warn);
@@ -1686,13 +1735,13 @@ consoleFontSize = 11
                 WriteNow(" 　　　　　（第一次執行，已建立預設 rclone-config.ini，可自行修改）", OutKind.Warn);
             if (!string.IsNullOrEmpty(_cfg.ParseError))
                 WriteNow(" [!] 設定解析失敗：" + _cfg.ParseError + "（本次改用預設值）", OutKind.Err);
-            WriteNow(" 雲端槽位: " + FmtDrives(_cfg.CloudDrives)
+            WriteNow(" 遠端槽位: " + FmtDrives(_cfg.RemoteDrives)
                    + "　　本地槽位: " + FmtDrives(_cfg.LocalDrives), OutKind.Normal);
 #if MODE_TRANSFER
             WriteNow(" 上傳到　: " + DescribeUploadTarget(), OutKind.Normal);
             WriteNow(" 下載到　: " + Expand(_cfg.DownloadDir), OutKind.Normal);
 #else
-            WriteNow(" 動作　　: 從雲端永久刪除（purge / deletefile）", OutKind.Normal);
+            WriteNow(" 動作　　: 從遠端永久刪除（purge / deletefile）", OutKind.Normal);
 #endif
             if (_cfg.AutoRefresh)
                 WriteNow(" 完成後　: 自動刷新掛載點（RC 位址："
@@ -1736,7 +1785,7 @@ consoleFontSize = 11
         }
 
 #if MODE_TRANSFER
-        private bool TryPlan(string src, string remote, HashSet<char> cloud, HashSet<char> local,
+        private bool TryPlan(string src, string remote, HashSet<char> remoteDrives, HashSet<char> local,
                              out Plan plan, out string err)
         {
             plan = null;
@@ -1754,16 +1803,16 @@ consoleFontSize = 11
                 return false;
             }
 
-            if (cloud.Contains(drive)) return PlanDownload(src, drive, remote, out plan, out err);
+            if (remoteDrives.Contains(drive)) return PlanDownload(src, drive, remote, out plan, out err);
             if (local.Count == 0 || local.Contains(drive)) return PlanUpload(src, remote, out plan, out err);
 
-            err = drive + ": 不是設定中的雲端槽位（" + FmtDrives(_cfg.CloudDrives)
+            err = drive + ": 不是設定中的遠端槽位（" + FmtDrives(_cfg.RemoteDrives)
                 + "）也不是本地槽位（" + FmtDrives(_cfg.LocalDrives)
-                + "）。請修改 rclone-config.ini 的 cloud / local 欄位。";
+                + "）。請修改 rclone-config.ini 的 remoteDrives / localDrives 欄位。";
             return false;
         }
 
-        // 本機 → 雲端。資料夾用 copy、單一檔案用 copyto，
+        // 本機 → 遠端。資料夾用 copy、單一檔案用 copyto，
         // 這樣才不會出現 "xxx.jpg\xxx.jpg" 這種多包一層同名資料夾的問題。
         private bool PlanUpload(string src, string remote, out Plan plan, out string err)
         {
@@ -1796,7 +1845,7 @@ consoleFontSize = 11
             return true;
         }
 
-        // 雲端 → 本機。同樣區分 copy / copyto。
+        // 遠端 → 本機。同樣區分 copy / copyto。
         private bool PlanDownload(string src, char drive, string remote, out Plan plan, out string err)
         {
             plan = null;
@@ -1807,6 +1856,11 @@ consoleFontSize = 11
             catch { full = src; }
 
             string rel = full.Length <= 3 ? "" : full.Substring(3).Trim('\\');
+            if (rel.Length == 0)
+            {
+                err = "不支援下載整個磁碟（拖進來的是磁碟根目錄）。";
+                return false;
+            }
             string relRemote = rel.Replace('\\', '/');
             bool isDir = Directory.Exists(src);
 
@@ -1818,25 +1872,20 @@ consoleFontSize = 11
 
             Plan p = new Plan();
             p.Source = src;
-            p.Name = rel.Length == 0 ? (drive + ":\\ 整個雲端硬碟") : Path.GetFileName(rel.TrimEnd('\\', '/'));
+            p.Name = Path.GetFileName(rel.TrimEnd('\\', '/'));
             p.IsDir = isDir;
             p.Verb = isDir ? "copy" : "copyto";
             p.From = remote + "/" + relRemote;
-            p.To = rel.Length == 0 ? destRoot : Path.Combine(destRoot, rel);
+            p.To = Path.Combine(destRoot, rel);
             p.RefreshDir = ParentRemoteDir(relRemote);
             p.Direction = "下載";
             p.Describe = (isDir ? "資料夾  " : "檔案　  ") + p.From + "\r\n　　　→ " + p.To;
 
-            if (rel.Length == 0)
-            {
-                p.ConfirmMessage = "你拖進來的是整個雲端磁碟根目錄。\r\n\r\n"
-                    + "這會把 " + p.From + " 全部下載到：\r\n" + destRoot + "\r\n\r\n確定要繼續嗎？";
-            }
             plan = p;
             return true;
         }
 #else
-        private bool TryPlan(string src, string remote, HashSet<char> cloud, HashSet<char> local,
+        private bool TryPlan(string src, string remote, HashSet<char> remoteDrives, HashSet<char> local,
                              out Plan plan, out string err)
         {
             plan = null;
@@ -1848,10 +1897,10 @@ consoleFontSize = 11
                 err = "無法判斷磁碟代號（不支援 UNC 路徑）：" + src;
                 return false;
             }
-            if (!cloud.Contains(drive))
+            if (!remoteDrives.Contains(drive))
             {
-                err = "「" + src + "」不是雲端槽位（設定為 " + FmtDrives(_cfg.CloudDrives)
-                    + "）。請從 rclone 掛載的雲端硬碟裡拖曳要刪除的項目。";
+                err = "「" + src + "」不是遠端槽位（設定為 " + FmtDrives(_cfg.RemoteDrives)
+                    + "）。請從 rclone 掛載的遠端槽位裡拖曳要刪除的項目。";
                 return false;
             }
 
@@ -1862,7 +1911,7 @@ consoleFontSize = 11
             string rel = full.Length <= 3 ? "" : full.Substring(3).Trim('\\');
             if (rel.Length == 0)
             {
-                err = "不能刪除整個雲端硬碟（拖進來的是磁碟根目錄）。";
+                err = "不能刪除整個磁碟（拖進來的是磁碟根目錄）。";
                 return false;
             }
 
@@ -1886,7 +1935,7 @@ consoleFontSize = 11
         private bool ConfirmDelete(List<Plan> plans)
         {
             StringBuilder sb = new StringBuilder();
-            sb.Append("即將從雲端永久刪除以下 ").Append(plans.Count).Append(" 個項目：\r\n\r\n");
+            sb.Append("即將從遠端永久刪除以下 ").Append(plans.Count).Append(" 個項目：\r\n\r\n");
             int n = 0;
             foreach (Plan p in plans)
             {
@@ -1896,12 +1945,7 @@ consoleFontSize = 11
             if (plans.Count > 8) sb.Append("　…等共 ").Append(plans.Count).Append(" 項\r\n");
             sb.Append("\r\n[!] 這不會經過 Windows 資源回收筒，無法還原。\r\n\r\n確定要刪除嗎？");
 
-            string msg = sb.ToString();
-            return UiSync(delegate
-            {
-                return MessageBox.Show(this, msg, "確認刪除", MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
-            });
+            return AskConfirm("確認刪除", sb.ToString());
         }
 #endif
 
