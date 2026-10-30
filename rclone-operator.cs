@@ -229,8 +229,8 @@ consoleFontSize = 11
             }
 
             c.Remote = GetStr(d, "remote", c.Remote);
-            c.RemoteDrives = GetStr(d, "remoteDrives", GetStr(d, "cloud", c.RemoteDrives));   // 舊 key：cloud
-            c.LocalDrives = GetStr(d, "localDrives", GetStr(d, "local", c.LocalDrives));      // 舊 key：local
+            c.RemoteDrives = GetStr(d, "remoteDrives", c.RemoteDrives);
+            c.LocalDrives = GetStr(d, "localDrives", c.LocalDrives);
             c.DownloadDir = GetStr(d, "downloadDir", c.DownloadDir);
             c.UploadDir = GetStr(d, "uploadDir", c.UploadDir);
             c.RclonePath = GetStr(d, "rclonePath", c.RclonePath);
