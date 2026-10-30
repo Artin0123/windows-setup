@@ -93,7 +93,6 @@ function Invoke-WindowsSetup {
         # launcher 必須用 winexe，否則開機會閃出黑色主控台視窗（csc-build 只會對含 WinForms 的原始碼自動判斷 winexe）
         $targets = @(
             @{ Cs = 'rclone-operator.cs';   Target = '';       Exes = @('rclone-transfer.exe', 'rclone-delete.exe'); Dest = (Join-Path $portableDir 'rclone-operator') },
-            @{ Cs = 'move-pi-sessions.cs';  Target = '';       Exes = @('move-pi-sessions.exe');                    Dest = (Join-Path $portableDir 'move-pi-session') },
             @{ Cs = 'yt-dlp-downloader.cs'; Target = '';       Exes = @('yt-dlp-downloader.exe');                   Dest = (Join-Path $portableDir 'yt-dlp-downloader') },
             @{ Cs = 'launcher.cs';          Target = 'winexe'; Exes = @('launcher.exe');                            Dest = $portableDir },
             @{ Cs = 'ffmpeg.cs';            Target = 'exe';    Exes = @('ffmpeg.exe');                              Dest = $shimsDir },

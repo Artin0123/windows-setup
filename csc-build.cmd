@@ -7,11 +7,11 @@ rem  csc-build.cmd - drop a .cs onto this file to build an .exe next to it
 rem
 rem  Usage:
 rem    1) Drag one or more .cs files onto this file
-rem    2) Or on the command line: csc-build.cmd path\to\App.cs [more.cs...]
+rem    2) Or on the command line: csc-build.cmd path\to\launcher.cs [more.cs...]
 rem    2b) In a terminal add /nopause first so it never waits for a key:
-rem        csc-build.cmd /nopause move-pi-sessions.cs   (or set CSC_NOPAUSE=1)
+rem        csc-build.cmd /nopause launcher.cs   (or set CSC_NOPAUSE=1)
 rem    3) Optional first argument is the target type: exe | winexe | library
-rem       e.g. csc-build.cmd winexe App.cs Helper.cs
+rem       e.g. csc-build.cmd winexe launcher.cs viewexif.cs
 rem
 rem  Defaults:
 rem    - Output goes next to the first .cs, named after it

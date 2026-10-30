@@ -534,7 +534,7 @@ namespace viewexif {
           g.DrawRectangle(p, cx - s / 2 + o, cy - s / 2 + o, s, s);
         }
       } else if (mode == 3) {
-        // six-tooth "shield" gear, solid with a hollow hub (same shape as move-pi-sessions / rclone-operator)
+        // six-tooth "shield" gear, solid with a hollow hub (same shape as rclone-operator)
         GearShape.Fill(g, hot ? Color.FromArgb(230, 230, 230) : Color.FromArgb(160, 162, 168), cx, cy, Math.Min(b.Width, b.Height) * 0.66f);
       } else if (mode == 2) {
         float w = b.Width, h = b.Height;
