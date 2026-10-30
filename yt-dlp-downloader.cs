@@ -1040,9 +1040,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
 
     internal sealed class ContentPanel : Panel
     {
-        public bool SquareTopLeft = true;
-        public bool SquareTopRight;
-
         public ContentPanel()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
@@ -1060,8 +1057,9 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             using (SolidBrush br = new SolidBrush(Theme.Card))
             {
                 g.FillPath(br, p);
-                if (SquareTopLeft) g.FillRectangle(br, 0, 0, Theme.Corner + 2, Theme.Corner + 2);
-                if (SquareTopRight) g.FillRectangle(br, Width - Theme.Corner - 2, 0, Theme.Corner + 2, Theme.Corner + 2);
+                // 上半部的兩個角永遠是直角，貼齊上方分頁列；只有下半部維持圓角
+                g.FillRectangle(br, 0, 0, Theme.Corner + 2, Theme.Corner + 2);
+                g.FillRectangle(br, Width - Theme.Corner + 1, 0, Theme.Corner + 2, Theme.Corner + 2);
             }
         }
     }
@@ -1397,8 +1395,10 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _gridFormats.Bounds = r;
             _gridOptions.Bounds = r;
             _lblFmtHint.Bounds = r;
-            RoundRegion(_gridFormats, false, true, true, true, Theme.Corner);
+            // 上半部兩角直角（貼齊分頁列底邊），下半部兩角圓角（貼合面板底邊）
+            RoundRegion(_gridFormats, false, false, true, true, Theme.Corner);
             RoundRegion(_gridOptions, false, false, true, true, Theme.Corner);
+            RoundRegion(_lblFmtHint, false, false, true, true, Theme.Corner);
 
             // 設定分頁
             int iw = TextRenderer.MeasureText("開啟設定檔位置", Font).Width + Theme.S(44);
@@ -1415,8 +1415,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
 
         private void ShowTab(int i)
         {
-            _panel.SquareTopLeft = i == 0;
-            _panel.SquareTopRight = i == 2;
             bool par = i == 1, set = i == 2;
             _btnAdd.Visible = _btnEdit.Visible = _btnDel.Visible = par;
             _gridOptions.Visible = par;
