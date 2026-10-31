@@ -185,7 +185,9 @@ auto_activate_venv() {
     local venv_path=""
     local activate_script=""
     # 向上遞迴尋找虛擬環境 (.venv 或 venv)
-    while [ -n "$target_dir" ] && [ "$target_dir" != "/" ]; do
+    # 防護：POSIX 走訪會終止於 "/"，但 Windows 磁碟根（C:/ → C: → .）dirname 不再縮短，
+    # 缺防護會變成無限迴圈（PWD 為 Windows 形式時觸發，bash 啟動即卡死）
+    while [ -n "$target_dir" ] && [ "$target_dir" != "/" ] && [ "$target_dir" != "." ]; do
         if [ -f "$target_dir/.venv/Scripts/activate" ]; then
             venv_path="$target_dir/.venv"
             activate_script="$target_dir/.venv/Scripts/activate"
@@ -203,7 +205,10 @@ auto_activate_venv() {
             activate_script="$target_dir/venv/bin/activate"
             break
         fi
+        local prev="$target_dir"
         target_dir="$(dirname "$target_dir")"
+        # dirname 不再縮短（磁碟根/相對路徑）即到底，防止無限迴圈
+        [ "$target_dir" = "$prev" ] && break
     done
     # 情況 A：離開專案或切換到其他環境 -> 自動 deactivate
     if [ -n "$VIRTUAL_ENV" ] && [ "$VIRTUAL_ENV" != "$venv_path" ]; then
