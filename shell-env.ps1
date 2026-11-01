@@ -1,4 +1,4 @@
-# shell-env.ps1 - 寫入 Bash (~/.bashrc) 與 PowerShell ($PROFILE) 的基本環境設定
+﻿# shell-env.ps1 - 寫入 Bash (~/.bashrc) 與 PowerShell ($PROFILE) 的基本環境設定
 # 以標記區塊管理，可重複執行（已存在就原地更新，不會重複寫入）；
 # 也會把舊版「沒有標記」的相同內容認出來並收進區塊，避免重複。
 
