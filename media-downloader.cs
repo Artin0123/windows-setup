@@ -1,6 +1,10 @@
-// media-downloader.cs — 單檔 WinForms 媒體下載圖形介面（.NET Framework 4.x，C# 5 可編）
+// media-downloader.cs — WinForms 媒體下載圖形介面（.NET Framework 4.x，C# 5 可編）
 //
 // 編譯：把本檔拖到 csc-build.cmd 上，或  csc-build.cmd /nopause media-downloader.cs
+//
+// 開發／測試：csc-build.cmd media-downloader.selftest.cs media-downloader.cs
+//             （測試檔放第一個；會產出主控台版 media-downloader-selftest.exe）
+//             執行：media-downloader-selftest.exe --selftest   （結束碼 0 = 全部通過）
 //
 // 功能：
 //   · 網址（單行）；「批量輸入」用外部編輯器（預設 notepad）編輯 exe 旁的 urls 檔（一行一個）
@@ -16,6 +20,9 @@
 //     另有批量輸入編輯器設定
 //   · 依賴「按需禁用」：兩個引擎都沒有（或都沒勾）才禁用下載；格式列表需要 yt-dlp；
 //     沒有 ffmpeg 只在需要合併或轉檔時提醒
+//
+// 其他：
+//   media-downloader.exe --selftest   執行純函數自我測試（結束碼 0 = 全部通過）
 //
 // ini（與 exe 同目錄，第一次執行自動產生）：
 //   uiFont / uiFontSize / ytdlp / ffmpeg / aria2c / outputDir / defaultArgs
@@ -43,14 +50,19 @@ namespace MediaDownloader
         private static extern bool SetProcessDPIAware();
 
         [STAThread]
-        private static void Main(string[] args)
+        private static int Main(string[] args)
         {
             // 編譯輔助：media-downloader.exe --make-ico out.ico（csc-build.cmd 用來產生 exe 圖示）
             if (args != null && args.Length == 2 && args[0] == "--make-ico")
             {
-                try { AppIcon.WriteIco(args[1]); } catch { }
-                return;
+                try { AppIcon.WriteIco(args[1]); return 0; } catch { return 1; }
             }
+
+            // 純函數自我測試：僅在 SELFTEST 定義時編入（一般建置不影響，見 media-downloader.selftest.cs）
+#if SELFTEST
+            if (args != null && args.Length == 1 && args[0] == "--selftest")
+                return SelfTest.RunAll();
+#endif
 
             // 不宣告 DPI 感知的話，Windows 會把整個視窗當點陣圖放大 → 文字模糊
             try { SetProcessDPIAware(); }
@@ -58,6 +70,7 @@ namespace MediaDownloader
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
+            return 0;
         }
     }
 
@@ -1112,7 +1125,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         private string[] _fmtHeaders = new string[0];
         private ToolInfo _yt = new ToolInfo(), _ff = new ToolInfo(), _ar = new ToolInfo();
         private bool _detected, _listing, _fmtLoaded, _fmtDirty, _updating, _chkGuard;
-        private bool _editorSession;   // 批量輸入編輯器開啟中
+        private readonly List<Process> _editors = new List<Process>();   // 批量輸入編輯器（可能同時開多個）
         private int _detectSeq;
         private string _argsKey = " ";   // 目前參數列正規化後前後加空白，供清單重繪時比對
 
@@ -1347,10 +1360,9 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             int y = in1 + rowH + gap2;
 
             // 名稱欄寬 = 最長的偵測項名稱 + 固定間距（各列版本文字靠這裡對齊，同表格欄位效果）
-            int nameCol = 0;
-            nameCol = Math.Max(nameCol, TextRenderer.MeasureText("aria2c", Font).Width);
-            nameCol = Math.Max(nameCol, TextRenderer.MeasureText("yt-dlp", Font).Width);
-            nameCol = Math.Max(nameCol, TextRenderer.MeasureText("ffmpeg", Font).Width);
+            int nameCol = Math.Max(Math.Max(TextRenderer.MeasureText("aria2c", Font).Width,
+                                            TextRenderer.MeasureText("yt-dlp", Font).Width),
+                                    TextRenderer.MeasureText("ffmpeg", Font).Width);
             nameCol += Theme.S(28);
             _lblDetAr.NameWidth = _lblDetYt.NameWidth = _lblDetFf.NameWidth = nameCol;
 
@@ -1376,7 +1388,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _gridOptions.Visible = par;
             _btnOpenIni.Visible = _btnRedetect.Visible = set;
             _lblDetYt.Visible = _lblDetFf.Visible = _lblDetAr.Visible = set;
-            _lblDetAr.Visible = _lblDetYt.Visible = _lblDetFf.Visible = set;
             _lblEditor.Visible = _boxEditor.Visible = set;
             RefreshFormatList();
             LayoutPanel();
@@ -1439,9 +1450,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                 _lblDetYt.Checked = false;
                 _lblDetAr.Checked = false;
             }
-            _lblDetAr.Title = "aria2c";
-            _lblDetYt.Title = "yt-dlp";
-            _lblDetFf.Title = "ffmpeg";
             _chkGuard = false;
         }
 
@@ -1531,8 +1539,15 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             return p;
         }
 
-        // http/https、一行一個（或以空白分隔）、# 開頭為註解、去重
-        private static List<string> ParseUrls(string file)
+        // 網址裡的雙引號會破壞命令列引號配對（cmd 的 \" 不代表跳脫，會提前閉合引號讓後面的 & 變成命令分隔符），
+        // 一律轉成 %22（合法網址本來就不含裸引號；yt-dlp 會做等價的百分號解碼）
+        private static string SanitizeUrl(string u)
+        {
+            return (u ?? "").Replace("\"", "%22");
+        }
+
+        // http/https、一行一個（或以空白分隔）、# 開頭為註解、去重（internal 供 SelfTest 驗證）
+        internal static List<string> ParseUrls(string file)
         {
             List<string> list = new List<string>();
             string text;
@@ -1547,7 +1562,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string raw in text.Split(new char[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                string l = raw.Trim();
+                string l = SanitizeUrl(raw.Trim());
                 if (l.Length == 0 || l[0] == '#') continue;
                 Uri u;
                 if (!Uri.TryCreate(l, UriKind.Absolute, out u)) continue;
@@ -1576,23 +1591,27 @@ option = 下載所有字幕 | --write-all-subs --skip-download
 
         private void CloseEditorSession()
         {
-            if (!_editorSession) return;
-            _editorSession = false;
+            if (_editors.Count > 0) return;   // 還有編輯器開著：Alt-Tab 回來不算結束，等全部關閉才刷新
             DropUrlsIfEmpty(UrlsPath());
             UpdateUrlBox();
         }
 
         private void UpdateUrlBox()
         {
-            bool active = UrlsFileActive();
-            if (active == _boxUrl.Inner.ReadOnly) return;
-            if (active)
+            List<string> urls = ParseUrls(UrlsPath());   // 只解析一次，清單與計數共用
+            if (urls.Count > 0)
             {
-                _boxUrl.Inner.ReadOnly = true;
-                _boxUrl.Inner.ForeColor = Theme.Dim;
-                _boxUrl.Inner.Text = "已從 urls 檔載入 " + ParseUrls(UrlsPath()).Count + " 個網址";
+                string msg = "已從 urls 檔載入 " + urls.Count + " 個網址";
+                if (!_boxUrl.Inner.ReadOnly)
+                {
+                    _boxUrl.Inner.ReadOnly = true;
+                    _boxUrl.Inner.ForeColor = Theme.Dim;
+                    _boxUrl.Inner.Text = msg;
+                }
+                else if (_boxUrl.Inner.Text != msg)   // 編輯器改了檔案內容：同步更新計數
+                    _boxUrl.Inner.Text = msg;
             }
-            else
+            else if (_boxUrl.Inner.ReadOnly)
             {
                 _boxUrl.Inner.ReadOnly = false;
                 _boxUrl.Inner.ForeColor = Theme.Text;
@@ -1605,7 +1624,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             List<string> urls = ParseUrls(UrlsPath());   // urls 檔非空 → 以檔案為準
             if (urls.Count > 0) return urls;
             List<string> list = new List<string>();
-            string u = _boxUrl.Inner.Text.Trim();
+            string u = SanitizeUrl(_boxUrl.Inner.Text.Trim());
             if (u.Length > 0) list.Add(u);
             return list;
         }
@@ -1624,15 +1643,15 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                 psi.UseShellExecute = true;
                 psi.WorkingDirectory = _cfg.ExeDir;
                 Process proc = Process.Start(psi);
-                _editorSession = true;
                 if (proc != null)
                 {
+                    _editors.Add(proc);
                     try
                     {
                         proc.EnableRaisingEvents = true;
                         proc.Exited += delegate
                         {
-                            try { BeginInvoke(new Action(delegate() { CloseEditorSession(); })); }
+                            try { BeginInvoke(new Action(delegate() { _editors.Remove(proc); CloseEditorSession(); })); }
                             catch { }
                         };
                     }
@@ -1641,7 +1660,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             }
             catch (Exception ex)
             {
-                _editorSession = false;
                 MessageBox.Show(this, "無法開啟編輯工具（" + ed + "）：\r\n" + ex.Message, Text);
             }
         }
@@ -1829,7 +1847,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             ThreadPool.QueueUserWorkItem(delegate
             {
                 string so, se; int code;
-                bool started = Tools.Run(exe, "--list-formats --playlist-items 1 \"" + url + "\"", 120000, out so, out se, out code);
+                bool started = Tools.Run(exe, "--list-formats --playlist-items 1 " + ArgsText.Quote(url), 120000, out so, out se, out code);
                 try
                 {
                     BeginInvoke(new Action(delegate
@@ -1873,8 +1891,8 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             RefreshFormatList();
         }
 
-        // 依表頭文字的位置切欄：欄與欄之間一定有一個「全部列皆為空白」的位置
-        private static List<FormatItem> ParseFormats(string output, out string[] headers)
+        // 依表頭文字的位置切欄：欄與欄之間一定有一個「全部列皆為空白」的位置（internal 供 SelfTest 驗證）
+        internal static List<FormatItem> ParseFormats(string output, out string[] headers)
         {
             headers = new string[0];
             List<FormatItem> res = new List<FormatItem>();
@@ -2020,7 +2038,17 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             if (_ff.Found && _ff.Exe.IndexOf('\\') >= 0 && args.IndexOf("--ffmpeg-location", StringComparison.Ordinal) < 0)
                 cmd.Append(" --ffmpeg-location " + ArgsText.Quote(Path.GetDirectoryName(_ff.Exe)));
             if (args.Length > 0) cmd.Append(" " + args);
-            foreach (string u in urls) cmd.Append(" " + ArgsText.Quote(u));
+            // 網址一律經 --batch-file 遞交，不進 cmd 命令列：cmd 的 \" 會提前閉合引號，
+            // 網址內的 & 會被當成命令分隔符（命令注入）；批次檔由 yt-dlp 直接讀取，不受 cmd 解析影響。
+            // 暫存檔留在 %TEMP%（下載程序是非同步新視窗，無法可靠回收，交由系統清理）。
+            string batchFile;
+            try { batchFile = WriteBatchFile(urls); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "無法建立網址清單暫存檔：\r\n" + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            cmd.Append(" --batch-file " + ArgsText.Quote(batchFile));
             cmd.Append(" & echo. & pause");
 
             try
@@ -2037,6 +2065,17 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             {
                 MessageBox.Show(this, "啟動下載失敗：\r\n" + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        // 把網址清單寫成 yt-dlp 的 --batch-file 檔（UTF-8、一行一個；內容已先消毒）
+        private static string WriteBatchFile(List<string> urls)
+        {
+            string file = Path.Combine(Path.GetTempPath(),
+                "media-downloader-batch-" + Guid.NewGuid().ToString("N") + ".txt");
+            StringBuilder sb = new StringBuilder();
+            foreach (string u in urls) sb.Append(u).Append("\r\n");
+            File.WriteAllText(file, sb.ToString(), new UTF8Encoding(false));
+            return file;
         }
 
         // 只勾 aria2c：新終端跑 aria2c 下載 urls 檔；參數列（含參數管理套用的內容）都會套用，
