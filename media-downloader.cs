@@ -1,6 +1,6 @@
-// yt-dlp-downloader.cs — 單檔 WinForms yt-dlp 圖形介面（.NET Framework 4.x，C# 5 可編）
+// media-downloader.cs — 單檔 WinForms 媒體下載圖形介面（.NET Framework 4.x，C# 5 可編）
 //
-// 編譯：把本檔拖到 csc-build.cmd 上，或  csc-build.cmd /nopause yt-dlp-downloader.cs
+// 編譯：把本檔拖到 csc-build.cmd 上，或  csc-build.cmd /nopause media-downloader.cs
 //
 // 功能：
 //   · 影片網址（單行）；「批量輸入」可貼多個網址（一行一個，按完成才會記住）
@@ -9,7 +9,7 @@
 //   · 分頁「格式列表」：執行 yt-dlp --list-formats 後以表格顯示，點一下套用 / 再點取消，
 //     影像 + 音訊可疊加（以 + 連接寫入 -f，-f 永遠排在參數最前面）；同類型只是切換
 //   · 分頁「參數管理」：參數項目表格（一次只能選一個），可新增 / 編輯 / 刪除
-//   · 分頁「設定」：開啟設定檔位置（檔案總管選取 yt-dlp-downloader.ini）、
+//   · 分頁「設定」：開啟設定檔位置（檔案總管選取 media-downloader.ini）、
 //     yt-dlp / ffmpeg / aria2c 偵測狀態（PATH 或 ini 指定路徑）、aria2c 多線程加速開關
 //   · 依賴「按需禁用」：沒有 yt-dlp 才禁用下載 / 列出格式；沒有 ffmpeg 只在需要合併或轉檔時提醒
 //
@@ -30,7 +30,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace YtDlpDownloader
+namespace MediaDownloader
 {
     internal static class Program
     {
@@ -40,7 +40,7 @@ namespace YtDlpDownloader
         [STAThread]
         private static void Main(string[] args)
         {
-            // 編譯輔助：yt-dlp-downloader.exe --make-ico out.ico（csc-build.cmd 用來產生 exe 圖示）
+            // 編譯輔助：media-downloader.exe --make-ico out.ico（csc-build.cmd 用來產生 exe 圖示）
             if (args != null && args.Length == 2 && args[0] == "--make-ico")
             {
                 try { AppIcon.WriteIco(args[1]); } catch { }
@@ -134,7 +134,7 @@ namespace YtDlpDownloader
     // ------------------------------------------------------------------ 設定檔
     internal sealed class Config
     {
-        public const string FileName = "yt-dlp-downloader.ini";
+        public const string FileName = "media-downloader.ini";
 
         public string FilePath = "";
         public string ExeDir = "";
@@ -151,7 +151,7 @@ namespace YtDlpDownloader
         public List<ArgOption> Options = new List<ArgOption>();
 
         private const string Template =
-@"; yt-dlp 下載器設定檔
+@"; 媒體下載器設定檔
 ; 格式：key = value　　以 ; 或 # 開頭的整行是註解
 
 ; 介面字型與大小
@@ -278,7 +278,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             }
             catch (Exception ex)
             {
-                MessageBox.Show("儲存設定檔失敗：\r\n" + ex.Message, "yt-dlp 下載器");
+                MessageBox.Show("儲存設定檔失敗：\r\n" + ex.Message, "媒體下載器");
             }
         }
 
@@ -1202,7 +1202,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _cfg = Config.Load(exeDir);
 
             AutoScaleMode = AutoScaleMode.None;
-            Text = "yt-dlp 下載器";
+            Text = "媒體下載器";
             try { Icon = AppIcon.CreateWindowIcon(); } catch { }
             Font = _cfg.MakeUiFont(1f, FontStyle.Regular);
             BackColor = Theme.Back; ForeColor = Theme.Text;
@@ -2001,32 +2001,42 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.Clear(Color.Transparent);
+                // 透明背景：只畫紅色矩形 + 白色三角 + 下載箭頭，沒有黑底也沒有外框。
 
-                // 圓角底板（藍色漸層）
-                RectangleF box = new RectangleF(S * 0.03f, S * 0.03f, S * 0.94f, S * 0.94f);
-                using (GraphicsPath bg = Theme.Round(box, S * 0.22f))
-                using (LinearGradientBrush lg = new LinearGradientBrush(box,
-                    Color.FromArgb(96, 156, 250), Color.FromArgb(38, 84, 186), 90f))
-                    g.FillPath(lg, bg);
+                // YouTube 紅色圓角矩形
+                RectangleF yt = new RectangleF(S * 0.10f, S * 0.16f, S * 0.68f, S * 0.50f);
+                using (GraphicsPath path = Theme.Round(yt, S * 0.14f))
+                using (SolidBrush rb = new SolidBrush(Color.FromArgb(230, 18, 18)))
+                    g.FillPath(rb, path);
 
-                // 向下箭頭
-                PointF[] arrow = new PointF[] {
-                    P(S, 0.43f, 0.17f), P(S, 0.57f, 0.17f), P(S, 0.57f, 0.43f), P(S, 0.70f, 0.43f),
-                    P(S, 0.50f, 0.66f), P(S, 0.30f, 0.43f), P(S, 0.43f, 0.43f) };
-                float w = Math.Max(1f, S * 0.045f);
+                // 白色播放三角
+                PointF[] play = new PointF[] {
+                    P(S, 0.33f, 0.285f), P(S, 0.33f, 0.535f), P(S, 0.555f, 0.41f) };
                 using (SolidBrush br = new SolidBrush(Color.White))
-                using (Pen pen = new Pen(Color.White, w))
+                using (Pen pen = new Pen(Color.White, Math.Max(1f, S * 0.03f)))
                 {
                     pen.LineJoin = LineJoin.Round;
-                    g.FillPolygon(br, arrow);
-                    g.DrawPolygon(pen, arrow);
+                    g.FillPolygon(br, play);
+                    g.DrawPolygon(pen, play);
                 }
 
-                // 底部托盤
-                using (Pen tray = new Pen(Color.White, Math.Max(1.5f, S * 0.07f)))
+                // 白色下載箭頭（壓在紅色矩形右下角）
+                PointF[] arrow = new PointF[] {
+                    P(S, 0.635f, 0.38f), P(S, 0.765f, 0.38f), P(S, 0.765f, 0.54f), P(S, 0.855f, 0.54f),
+                    P(S, 0.70f, 0.745f), P(S, 0.545f, 0.54f), P(S, 0.635f, 0.54f) };
+                using (SolidBrush br2 = new SolidBrush(Color.White))
+                using (Pen pen2 = new Pen(Color.White, Math.Max(1f, S * 0.03f)))
                 {
-                    tray.StartCap = LineCap.Round; tray.EndCap = LineCap.Round; tray.LineJoin = LineJoin.Round;
-                    g.DrawLines(tray, new PointF[] { P(S, 0.25f, 0.62f), P(S, 0.25f, 0.79f), P(S, 0.75f, 0.79f), P(S, 0.75f, 0.62f) });
+                    pen2.LineJoin = LineJoin.Round;
+                    g.FillPolygon(br2, arrow);
+                    g.DrawPolygon(pen2, arrow);
+                }
+
+                // 箭頭下方托盤條
+                using (Pen tray = new Pen(Color.White, Math.Max(1.5f, S * 0.055f)))
+                {
+                    tray.StartCap = LineCap.Round; tray.EndCap = LineCap.Round;
+                    g.DrawLine(tray, S * 0.545f, S * 0.805f, S * 0.855f, S * 0.805f);
                 }
             }
             return bmp;
