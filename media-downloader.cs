@@ -19,7 +19,7 @@
 //
 // ini（與 exe 同目錄，第一次執行自動產生）：
 //   uiFont / uiFontSize / ytdlp / ffmpeg / aria2c / outputDir / defaultArgs
-//   editor / ytdlpEnabled / aria2Enabled
+//   editor / useAria2
 //   option = 顯示名稱 | 參數字串      （可有多行；舊版 "| 0/1 | 0/1" 尾巴與 profile 行仍可讀入）
 
 using System;
@@ -151,8 +151,7 @@ namespace MediaDownloader
         public string OutputDir = "";
         public string DefaultArgs = "";
         public string Editor = "notepad";
-        public bool YtdlpEnabled = true;
-        public bool Aria2Enabled = false;
+        public bool UseAria2 = false;   // 下載引擎：false = yt-dlp，true = aria2c（互斥，二選一）
         public List<ArgOption> Options = new List<ArgOption>();
 
         private const string Template =
@@ -167,8 +166,7 @@ outputDir =
 
 defaultArgs =
 
-aria2Enabled = 0
-ytdlpEnabled = 1
+useAria2 = 0
 
 editor = notepad
 
@@ -199,6 +197,8 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             catch { raw = Template; }
             if (raw.Length > 0 && raw[0] == '\uFEFF') raw = raw.Substring(1);
 
+            bool hasUseAria2 = false, legacyAria2 = false;
+            bool? legacyYtdlp = null;
             foreach (string line0 in raw.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
             {
                 string line = line0.Trim();
@@ -242,10 +242,13 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                     case "outputdir": c.OutputDir = val; break;
                     case "defaultargs": c.DefaultArgs = val; break;
                     case "editor": if (val.Length > 0) c.Editor = val; break;
-                    case "aria2enabled": c.Aria2Enabled = val != "0"; break;
-                    case "ytdlpenabled": c.YtdlpEnabled = val != "0"; break;
+                    case "usearia2": c.UseAria2 = val == "1"; hasUseAria2 = true; break;
+                    // 舊鍵（已廢棄，不再寫出）：無 useAria2 時推導一次
+                    case "aria2enabled": legacyAria2 = val == "1"; break;
+                    case "ytdlpenabled": legacyYtdlp = val != "0"; break;
                 }
             }
+            if (!hasUseAria2 && legacyAria2 && legacyYtdlp != true) c.UseAria2 = true;
             return c;
         }
 
@@ -1406,7 +1409,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         {
             _yt = ty; _ff = tf; _ar = ta; _detected = true;
 
-            // 依 ini 的勾選狀態還原（aria2Enabled 只記勾選狀態，不再注入參數）
+            // 依 ini 的 useAria2 還原勾選狀態
             UpdateDetectLabels();
             UpdateEnabled();
             LayoutPanel();
@@ -1433,8 +1436,9 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _chkGuard = true;
             if (_detected)
             {
-                _lblDetYt.Checked = _yt.Found && _cfg.YtdlpEnabled;
-                _lblDetAr.Checked = _ar.Found && _cfg.Aria2Enabled;
+                // 單一開關：useAria2 = false → yt-dlp，true → aria2c（工具沒裝該列就不亮）
+                _lblDetYt.Checked = _yt.Found && !_cfg.UseAria2;
+                _lblDetAr.Checked = _ar.Found && _cfg.UseAria2;
             }
             else
             {
@@ -1447,16 +1451,15 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _chkGuard = false;
         }
 
-        // yt-dlp 模式 = 勾了 yt-dlp（且 ffmpeg 等其他依賴照舊）
+        // yt-dlp 模式 = 引擎選 yt-dlp（useAria2 = false）
         private bool YtEngineOn
         {
-            get { return _detected && _yt.Found && _lblDetYt.Checked; }
+            get { return _detected && _yt.Found && !_cfg.UseAria2; }
         }
 
         private void UpdateEnabled()
         {
-            bool arOn = _detected && _ar.Found && _lblDetAr.Checked;
-            _btnDownload.Enabled = YtEngineOn || arOn;
+            _btnDownload.Enabled = YtEngineOn || (_detected && _ar.Found && _cfg.UseAria2);
             RefreshFormatList();
         }
 
@@ -1478,41 +1481,20 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             return true;
         }
 
+        // 互斥引擎：勾 yt-dlp = useAria2 false；勾 aria2c = useAria2 true；只存一個變數
         private void OnYtToggled(object sender, EventArgs e)
         {
             if (_chkGuard || !_detected) return;
-            bool on = _lblDetYt.Checked;
-            _cfg.YtdlpEnabled = on;
-            string flag = on ? "1" : "0";
-            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("ytdlpEnabled", flag); });
-
-            if (on && _lblDetAr.Checked)   // 互斥：勾 yt-dlp 就取消 aria2c
-            {
-                _chkGuard = true;
-                _lblDetAr.Checked = false;
-                _chkGuard = false;
-                _cfg.Aria2Enabled = false;
-                ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("aria2Enabled", "0"); });
-            }
+            _cfg.UseAria2 = false;
+            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("useAria2", "0"); });
             UpdateEnabled();
         }
 
         private void OnAriaToggled(object sender, EventArgs e)
         {
             if (_chkGuard || !_detected) return;
-            bool on = _lblDetAr.Checked;
-            _cfg.Aria2Enabled = on;
-            string flag = on ? "1" : "0";
-            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("aria2Enabled", flag); });
-
-            if (on && _lblDetYt.Checked)   // 互斥：勾 aria2c 就取消 yt-dlp
-            {
-                _chkGuard = true;
-                _lblDetYt.Checked = false;
-                _chkGuard = false;
-                _cfg.YtdlpEnabled = false;
-                ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("ytdlpEnabled", "0"); });
-            }
+            _cfg.UseAria2 = true;
+            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("useAria2", "1"); });
             UpdateEnabled();
         }
 

@@ -34,6 +34,9 @@
   --downloader-args "aria2c:-x 16 -s 16 -k 1M"
 - [x] 調整 12：參數管理選中判定改「最長（最具體）者優先」：加速版包含一般版參數時只亮加速版；
   點其他選項時先移長參數再移短參數，避免殘留；避免點一般版被誤判成「已選→關閉」
+- [x] 調整 13：兩個引擎勾選鍵（ytdlpEnabled/aria2Enabled）簡化成單一 useAria2（0 = yt-dlp，
+  1 = aria2c；舊鍵唯讀推導一次）；順帶清掃：無死代碼（私有方法全有引用；
+  DefaultArgs/_fmtDirty/_updating/_chkGuard 均在用）
 
 ## 完成備註
 
@@ -128,10 +131,10 @@ uiFont / uiFontSize          介面字型（沿用）
 ytdlp / ffmpeg / aria2c      工具路徑（沿用）
 outputDir                    下載資料夾（沿用）
 defaultArgs                  啟動參數（沿用）
-aria2Enabled                 aria2c 勾選狀態（0/1）
+aria2Enabled                 （已廢棄）→ useAria2
+ytdlpEnabled                 （已廢棄）→ useAria2
+useAria2                     下載引擎（0 = yt-dlp，1 = aria2c；互斥二選一）
 editor                       批量輸入編輯器（預設 notepad）
-ytdlpEnabled = 1/0           yt-dlp 勾選狀態（新）
-aria2Enabled = 1/0           aria2c 勾選狀態（沿用 key，語意改為「勾選 aria2c」）
 option = 顯示名稱 | 參數字串  參數管理（沿用）
 ```
 
