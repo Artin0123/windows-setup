@@ -158,35 +158,24 @@ namespace MediaDownloader
         public List<ArgOption> Options = new List<ArgOption>();
 
         private const string Template =
-@"; 媒體下載器設定檔
-; 格式：key = value　　以 ; 或 # 開頭的整行是註解
-
-; 介面字型與大小
-uiFont = Microsoft YaHei UI
+@"uiFont = Microsoft YaHei UI
 uiFontSize = 11
 
-; 工具路徑（留空 = 從 PATH 尋找）。可填 exe 完整路徑或所在資料夾
 ytdlp =
 ffmpeg =
 aria2c =
 
-; 下載資料夾（留空 = %USERPROFILE%\Downloads；相對路徑以 exe 目錄為基準）
 outputDir =
 
-; 啟動時參數列的初始內容
 defaultArgs =
 
-; aria2c 參數：勾 yt-dlp 時注入參數列加速；只勾 aria2c 時直接加在 aria2c 指令後
-; （預設值是 yt-dlp 用的寫法；只用 aria2c 直接下載時改成 -x 16 -s 16 -k 1M 這類原生參數）
 aria2Enabled = 0
 ytdlpEnabled = 1
 aria2Args = --downloader aria2c --downloader-args ""aria2c:-x 16 -s 16 -k 1M""
 
-; 批量輸入用的編輯工具（開啟 media-downloader-urls.txt；例如 notepad、code）
 editor = notepad
 
-; 參數管理  option = 顯示名稱 | 參數字串
-option = 檔案下載 | -o ""%(title)s.%(ext)s""
+option = 檔案下載 | -o ""%(title)s.%(ext)s"" -x4 -s4 --max-tries=2 --connect-timeout=5 --timeout=5
 option = 僅最佳音訊 | -f bestaudio
 option = 1080p 視訊 + 最佳音訊 | bestvideo[format_note*=1080p]+bestaudio
 option = 1080p mp4 視訊 + 最佳音訊 | bestvideo[format_note*=1080p][ext=mp4]+bestaudio
@@ -280,9 +269,8 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                 string text = File.Exists(FilePath) ? File.ReadAllText(FilePath, Encoding.UTF8) : Template;
                 text = Regex.Replace(text, @"^[ \t]*(option|profile)[ \t]*=.*(\r?\n|$)", "",
                     RegexOptions.Multiline | RegexOptions.IgnoreCase);
-                text = Regex.Replace(text, @"^; (參數選項|已儲存的參數)[ \t]*(\r?\n|$)", "", RegexOptions.Multiline);
                 StringBuilder sb = new StringBuilder(text.TrimEnd());
-                sb.Append("\r\n\r\n; 參數選項\r\n");
+                sb.Append("\r\n\r\n");
                 foreach (ArgOption o in Options)
                 {
                     // 名稱含 | 或換行會破壞 ini 格式
@@ -1122,7 +1110,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         private const string FormatHintIdle = "點擊此處列出可用格式\r\n（需先輸入網址）";
 
         private readonly Config _cfg;
-        private readonly Label _lblUrl, _lblArgs, _lblPath, _lblFmtHint, _lblAria2Args, _lblEditor;
+        private readonly Label _lblUrl, _lblArgs, _lblPath, _lblFmtHint, _lblEditor;
         private readonly StatusRow _lblDetYt, _lblDetFf, _lblDetAr;
         private readonly RoundBox _boxUrl, _boxArgs, _boxPath, _boxAria2Args, _boxEditor;
         private readonly RoundButton _btnBatch, _btnDownload, _btnSave, _btnOpenFolder, _btnAdd, _btnEdit, _btnDel, _btnOpenIni, _btnRedetect;
@@ -1187,16 +1175,15 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _lblFmtHint.TextAlign = ContentAlignment.MiddleCenter;
             _lblFmtHint.Cursor = Cursors.Hand;
 
+            _lblDetAr = new StatusRow("aria2c", true);
             _lblDetYt = new StatusRow("yt-dlp", true);
             _lblDetFf = new StatusRow("ffmpeg", false);
-            _lblDetAr = new StatusRow("aria2c", true);
 
-            _lblAria2Args = MakePanelLabel("aria2c 參數");
-            _boxAria2Args = new RoundBox(false);
-            _boxAria2Args.Inner.Text = _cfg.Aria2Args;
             _lblEditor = MakePanelLabel("批量輸入編輯器");
             _boxEditor = new RoundBox(false);
             _boxEditor.Inner.Text = string.IsNullOrEmpty(_cfg.Editor) ? "notepad" : _cfg.Editor;
+            _boxAria2Args = new RoundBox(false);
+            _boxAria2Args.Inner.Text = _cfg.Aria2Args;
 
             _gridFormats = new GridList();
             _gridFormats.IsOn = delegate(object o) { return _selFormats.Contains(o as FormatItem); };
@@ -1207,9 +1194,9 @@ option = 下載所有字幕 | --write-all-subs --skip-download
 
             _panel.Controls.Add(_btnAdd); _panel.Controls.Add(_btnEdit); _panel.Controls.Add(_btnDel);
             _panel.Controls.Add(_btnOpenIni); _panel.Controls.Add(_btnRedetect);
-            _panel.Controls.Add(_lblDetYt); _panel.Controls.Add(_lblDetFf); _panel.Controls.Add(_lblDetAr);
-            _panel.Controls.Add(_lblAria2Args); _panel.Controls.Add(_boxAria2Args);
+            _panel.Controls.Add(_lblDetAr); _panel.Controls.Add(_lblDetYt); _panel.Controls.Add(_lblDetFf);
             _panel.Controls.Add(_lblEditor); _panel.Controls.Add(_boxEditor);
+            _panel.Controls.Add(_boxAria2Args);
             _panel.Controls.Add(_lblFmtHint); _panel.Controls.Add(_gridFormats); _panel.Controls.Add(_gridOptions);
 
             Controls.Add(_boxUrl); Controls.Add(_btnBatch); Controls.Add(_btnDownload);
@@ -1348,7 +1335,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             int pw = _panel.Width, ph = _panel.Height, in1 = Theme.S(18);
             int lh = Font.Height;
             int rowH = lh + Theme.S(14);
-            int bg = Theme.S(10);
+            int bg = Theme.S(12);   // 統一間距
             int bw = Math.Max(Theme.S(84), TextRenderer.MeasureText("新增", Font).Width + Theme.S(40));
             _btnAdd.SetBounds(in1, in1, bw, rowH);
             _btnEdit.SetBounds(in1 + bw + bg, in1, bw, rowH);
@@ -1365,21 +1352,37 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             RoundRegion(_gridOptions, false, false, true, true, Theme.Corner);
             RoundRegion(_lblFmtHint, false, false, true, true, Theme.Corner);
 
-            // 設定分頁
+            // 設定分頁（由上到下：按鈕列 → 批量輸入編輯器 → aria2c → yt-dlp → ffmpeg；間距統一 bg）
             int iw = TextRenderer.MeasureText("開啟設定檔位置", Font).Width + Theme.S(44);
             int rw = TextRenderer.MeasureText("重新偵測", Font).Width + Theme.S(44);
             _btnOpenIni.SetBounds(in1, in1, iw, rowH);
             _btnRedetect.SetBounds(in1 + iw + bg, in1, rw, rowH);
-            int y = in1 + rowH + Theme.S(22);
-            int lineH = lh + Theme.S(12);
+            int y = in1 + rowH + bg;
+
+            // 名稱欄寬 = 最長的偵測項名稱 + 固定間距（各列版本文字靠這裡對齊，同表格欄位效果）
+            int nameCol = 0;
+            nameCol = Math.Max(nameCol, TextRenderer.MeasureText("aria2c", Font).Width);
+            nameCol = Math.Max(nameCol, TextRenderer.MeasureText("yt-dlp", Font).Width);
+            nameCol = Math.Max(nameCol, TextRenderer.MeasureText("ffmpeg", Font).Width);
+            nameCol += Theme.S(28);
+            _lblDetAr.NameWidth = _lblDetYt.NameWidth = _lblDetFf.NameWidth = nameCol;
+
             int rowW = pw - in1 * 2;
-            _lblDetYt.SetBounds(in1, y, rowW, lineH); y += lineH;
-            _lblDetFf.SetBounds(in1, y, rowW, lineH); y += lineH;
-            _lblDetAr.SetBounds(in1, y, rowW, lineH); y += lineH + Theme.S(16);
-            _lblAria2Args.SetBounds(in1, y, rowW, lh); y += lh + Theme.S(4);
-            _boxAria2Args.SetBounds(in1, y, rowW, rowH); y += rowH + Theme.S(12);
-            _lblEditor.SetBounds(in1, y, rowW, lh); y += lh + Theme.S(4);
-            _boxEditor.SetBounds(in1, y, rowW, rowH);
+
+            int edLabW = TextRenderer.MeasureText("批量輸入編輯器", Font).Width + bg;
+            _lblEditor.SetBounds(in1, y, edLabW, rowH);
+            _boxEditor.SetBounds(in1 + edLabW, y, Math.Max(Theme.S(120), rowW - edLabW), rowH);
+            y += rowH + bg;
+
+            // aria2c 列：勾選 + 名稱 + 版本在左，參數框在後佔滿剩餘寬度
+            int stW = Math.Max(Theme.S(200), rowW * 45 / 100);
+            _lblDetAr.SetBounds(in1, y, stW, rowH);
+            int arX = in1 + stW + bg;
+            _boxAria2Args.SetBounds(arX, y, Math.Max(Theme.S(120), pw - in1 - arX), rowH);
+            y += rowH + bg;
+
+            _lblDetYt.SetBounds(in1, y, rowW, rowH); y += rowH + bg;
+            _lblDetFf.SetBounds(in1, y, rowW, rowH);
         }
 
         private void ShowTab(int i)
@@ -1389,7 +1392,8 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _gridOptions.Visible = par;
             _btnOpenIni.Visible = _btnRedetect.Visible = set;
             _lblDetYt.Visible = _lblDetFf.Visible = _lblDetAr.Visible = set;
-            _lblAria2Args.Visible = _boxAria2Args.Visible = _lblEditor.Visible = _boxEditor.Visible = set;
+            _lblDetAr.Visible = _lblDetYt.Visible = _lblDetFf.Visible = set;
+            _boxAria2Args.Visible = _lblEditor.Visible = _boxEditor.Visible = set;
             RefreshFormatList();
             LayoutPanel();
             _panel.Invalidate();
@@ -1454,7 +1458,9 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                 _lblDetYt.Checked = false;
                 _lblDetAr.Checked = false;
             }
-            _lblDetAr.Title = (_lblDetYt.Checked && _lblDetAr.Checked) ? "aria2c（已加速 yt-dlp）" : "aria2c";
+            _lblDetAr.Title = "aria2c";
+            _lblDetYt.Title = "yt-dlp";
+            _lblDetFf.Title = "ffmpeg";
             _chkGuard = false;
         }
 
@@ -1468,6 +1474,10 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         {
             bool arOn = _detected && _ar.Found && _lblDetAr.Checked;
             _btnDownload.Enabled = YtEngineOn || arOn;
+            // aria2c 參數框：有偵測到 yt-dlp 才可編輯，其他情況唯讀
+            bool ariaEditable = _detected && _yt.Found;
+            _boxAria2Args.Inner.ReadOnly = !ariaEditable;
+            _boxAria2Args.Inner.ForeColor = ariaEditable ? Theme.Text : Theme.Dim;
             RefreshFormatList();
         }
 
@@ -1487,7 +1497,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                     _chkGuard = true;
                     _lblDetAr.Checked = has;
                     _cfg.Aria2Enabled = has;
-                    _lblDetAr.Title = (has && YtEngineOn) ? "aria2c（已加速 yt-dlp）" : "aria2c";
                     _chkGuard = false;
                     string flag = has ? "1" : "0";
                     ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("aria2Enabled", flag); });
@@ -1508,7 +1517,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             if (_ar.Found && _lblDetAr.Checked && _cfg.Aria2Args.Length > 0)
                 _boxArgs.Inner.Text = on ? ArgsText.Add(_boxArgs.Inner.Text, _cfg.Aria2Args)
                                          : ArgsText.Remove(_boxArgs.Inner.Text, _cfg.Aria2Args);
-            _lblDetAr.Title = (on && _lblDetAr.Checked) ? "aria2c（已加速 yt-dlp）" : "aria2c";
             _chkGuard = false;
             UpdateEnabled();
         }
@@ -1525,7 +1533,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             if (YtEngineOn && _cfg.Aria2Args.Length > 0)
                 _boxArgs.Inner.Text = on ? ArgsText.Add(_boxArgs.Inner.Text, _cfg.Aria2Args)
                                          : ArgsText.Remove(_boxArgs.Inner.Text, _cfg.Aria2Args);
-            _lblDetAr.Title = (YtEngineOn && on) ? "aria2c（已加速 yt-dlp）" : "aria2c";
             _chkGuard = false;
             UpdateEnabled();
         }
@@ -1533,6 +1540,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         // 設定分頁：aria2c 參數存檔；若正注入在參數列裡，同步換新
         private void SaveAria2Args()
         {
+            if (!(_detected && _yt.Found)) return;   // 唯讀狀態（沒有 yt-dlp）不寫回
             string t = ArgsText.Norm(_boxAria2Args.Inner.Text);
             if (t == _cfg.Aria2Args) return;
             string old = _cfg.Aria2Args;
@@ -2152,6 +2160,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         public int State;          // 0 偵測中, 1 有, 2 無
         public string Detail = "";
         public bool Checkable;
+        public int NameWidth;      // 名稱欄寬（各列共用，由主視窗依最長名稱算好；版本文字從這裡對齊）
         private bool _checked, _over;
 
         public event EventHandler CheckedChanged;
@@ -2216,7 +2225,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             TextFormatFlags fl = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine
                 | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
             int markW = Theme.S(30);
-            int nameW = TextRenderer.MeasureText(Title, Font).Width + Theme.S(28);
+            int nameW = NameWidth > 0 ? NameWidth : TextRenderer.MeasureText(Title, Font).Width + Theme.S(28);
             Rectangle markRect = new Rectangle(0, 0, markW, Height);
 
             if (Checkable && (State == 1 || State == 2))
