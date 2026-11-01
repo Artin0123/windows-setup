@@ -2001,42 +2001,35 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.Clear(Color.Transparent);
-                // 透明背景：只畫紅色矩形 + 白色三角 + 下載箭頭，沒有黑底也沒有外框。
 
-                // YouTube 紅色圓角矩形
-                RectangleF yt = new RectangleF(S * 0.10f, S * 0.16f, S * 0.68f, S * 0.50f);
-                using (GraphicsPath path = Theme.Round(yt, S * 0.14f))
-                using (SolidBrush rb = new SolidBrush(Color.FromArgb(230, 18, 18)))
-                    g.FillPath(rb, path);
+                // 紅色漸層圓角底板
+                RectangleF box = new RectangleF(S * 0.03f, S * 0.03f, S * 0.94f, S * 0.94f);
+                using (GraphicsPath bg = Theme.Round(box, S * 0.22f))
+                using (LinearGradientBrush lg = new LinearGradientBrush(box,
+                    Color.FromArgb(235, 60, 55), Color.FromArgb(170, 15, 12), 90f))
+                    g.FillPath(lg, bg);
 
-                // 白色播放三角
-                PointF[] play = new PointF[] {
-                    P(S, 0.33f, 0.285f), P(S, 0.33f, 0.535f), P(S, 0.555f, 0.41f) };
+                // 白色下載箭頭
+                PointF[] arrow = new PointF[] {
+                    new PointF(S * 0.43f, S * 0.17f), new PointF(S * 0.57f, S * 0.17f),
+                    new PointF(S * 0.57f, S * 0.43f), new PointF(S * 0.70f, S * 0.43f),
+                    new PointF(S * 0.50f, S * 0.66f), new PointF(S * 0.30f, S * 0.43f),
+                    new PointF(S * 0.43f, S * 0.43f) };
+                float w = Math.Max(1f, S * 0.045f);
                 using (SolidBrush br = new SolidBrush(Color.White))
-                using (Pen pen = new Pen(Color.White, Math.Max(1f, S * 0.03f)))
+                using (Pen pen = new Pen(Color.White, w))
                 {
                     pen.LineJoin = LineJoin.Round;
-                    g.FillPolygon(br, play);
-                    g.DrawPolygon(pen, play);
+                    g.FillPolygon(br, arrow);
+                    g.DrawPolygon(pen, arrow);
                 }
 
-                // 白色下載箭頭（壓在紅色矩形右下角）
-                PointF[] arrow = new PointF[] {
-                    P(S, 0.635f, 0.38f), P(S, 0.765f, 0.38f), P(S, 0.765f, 0.54f), P(S, 0.855f, 0.54f),
-                    P(S, 0.70f, 0.745f), P(S, 0.545f, 0.54f), P(S, 0.635f, 0.54f) };
-                using (SolidBrush br2 = new SolidBrush(Color.White))
-                using (Pen pen2 = new Pen(Color.White, Math.Max(1f, S * 0.03f)))
+                // 底部托盤
+                using (Pen tray = new Pen(Color.White, Math.Max(1.5f, S * 0.07f)))
                 {
-                    pen2.LineJoin = LineJoin.Round;
-                    g.FillPolygon(br2, arrow);
-                    g.DrawPolygon(pen2, arrow);
-                }
-
-                // 箭頭下方托盤條
-                using (Pen tray = new Pen(Color.White, Math.Max(1.5f, S * 0.055f)))
-                {
-                    tray.StartCap = LineCap.Round; tray.EndCap = LineCap.Round;
-                    g.DrawLine(tray, S * 0.545f, S * 0.805f, S * 0.855f, S * 0.805f);
+                    tray.StartCap = LineCap.Round; tray.EndCap = LineCap.Round; tray.LineJoin = LineJoin.Round;
+                    g.DrawLines(tray, new PointF[] { new PointF(S * 0.25f, S * 0.62f), new PointF(S * 0.25f, S * 0.79f),
+                        new PointF(S * 0.75f, S * 0.79f), new PointF(S * 0.75f, S * 0.62f) });
                 }
             }
             return bmp;
