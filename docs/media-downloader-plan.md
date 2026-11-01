@@ -6,7 +6,7 @@
 
 - [x] Part 1：更名（namespace / ini / 標題 / setup.ps1 / git mv → media-downloader.cs）
 - [x] Part 2：圖示改 file-dl 款（白箭頭 + 托盤，紅底）
-- [ ] Part 3：批量輸入改外部編輯器（urls 檔、移除舊批量邏輯）
+- [x] Part 3：批量輸入改外部編輯器（urls 檔、移除舊批量邏輯）
 - [ ] Part 4：設定分頁（偵測列勾選框、aria2c 參數 / 批量輸入編輯器文字框）
 - [ ] Part 5：下載分流（aria2c 直接下載）、格式列表禁用、ini 模板與「檔案下載」option
 

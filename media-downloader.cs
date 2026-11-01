@@ -3,7 +3,8 @@
 // 編譯：把本檔拖到 csc-build.cmd 上，或  csc-build.cmd /nopause media-downloader.cs
 //
 // 功能：
-//   · 影片網址（單行）；「批量輸入」可貼多個網址（一行一個，按完成才會記住）
+//   · 網址（單行）；「批量輸入」用外部編輯器（預設 notepad）編輯 exe 旁的 urls 檔（一行一個）
+//     urls 檔非空時以下載以檔案為準；空的 urls 檔在編輯器關閉後自動刪除
 //   · 參數列可直接編輯，「儲存」把目前參數存成「參數管理」裡的項目
 //   · 下載路徑（預設 %USERPROFILE%\Downloads）與「開啟資料夾」
 //   · 分頁「格式列表」：執行 yt-dlp --list-formats 後以表格顯示，點一下套用 / 再點取消，
@@ -145,6 +146,7 @@ namespace MediaDownloader
         public string Aria2c = "";
         public string OutputDir = "";
         public string DefaultArgs = "";
+        public string Editor = "notepad";
         public const string DefaultAria2Args = "--downloader aria2c --downloader-args \"aria2c:-x 16 -s 16 -k 1M\"";
         public string Aria2Args = DefaultAria2Args;
         public bool Aria2Enabled = true;
@@ -245,6 +247,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                     case "aria2c": c.Aria2c = val; break;
                     case "outputdir": c.OutputDir = val; break;
                     case "defaultargs": c.DefaultArgs = val; break;
+                    case "editor": if (val.Length > 0) c.Editor = val; break;
                     case "aria2enabled": c.Aria2Enabled = val != "0"; break;
                     case "aria2args": if (val.Length > 0) { c.Aria2Args = val; hasAria2Key = true; } break;
                 }
@@ -1173,7 +1176,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
     // ------------------------------------------------------------------ 主視窗
     internal sealed class MainForm : Form
     {
-        private const string FormatHintIdle = "點擊此處列出可用格式\r\n（需先輸入影片網址）";
+        private const string FormatHintIdle = "點擊此處列出可用格式\r\n（需先輸入網址）";
 
         private readonly Config _cfg;
         private readonly Label _lblUrl, _lblArgs, _lblPath, _lblFmtHint;
@@ -1188,9 +1191,9 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         private List<FormatItem> _allFormats = new List<FormatItem>();
         private List<FormatItem> _selFormats = new List<FormatItem>();
         private string[] _fmtHeaders = new string[0];
-        private List<string> _batch;   // 非 null = 批量模式
         private ToolInfo _yt = new ToolInfo(), _ff = new ToolInfo(), _ar = new ToolInfo();
         private bool _detected, _aria2Applied, _listing, _fmtLoaded, _fmtDirty, _updating, _chkGuard;
+        private bool _editorSession;   // 批量輸入編輯器開啟中
         private int _detectSeq;
         private string _argsKey = " ";   // 目前參數列正規化後前後加空白，供清單重繪時比對
 
@@ -1213,7 +1216,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             ClientSize = new Size(Math.Max(Theme.S(820), lh * 38), needH);
             MinimumSize = new Size(Size.Width - Theme.S(60), Size.Height - Theme.S(80));
 
-            _lblUrl = MakeLabel("影片");
+            _lblUrl = MakeLabel("網址");
             _boxUrl = new RoundBox(false);
             _btnBatch = MakeBtn("批量輸入", Theme.Btn);
             _btnDownload = MakeBtn("下載", Theme.Accent);
@@ -1267,7 +1270,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
 
             ToolTip tip = new ToolTip();
             tip.SetToolTip(_btnSave, "把目前參數存成「參數管理」裡的項目");
-            tip.SetToolTip(_btnBatch, "貼上多個網址（一行一個）");
+            tip.SetToolTip(_btnBatch, "用編輯器編輯網址清單（一行一個）");
 
             _boxPath.Inner.Text = _cfg.ResolveOutputDir();
 
@@ -1280,10 +1283,10 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             UpdateDetectLabels();
             ShowTab(0);
             UpdateEnabled();
+            UpdateUrlBox();
 
             _boxArgs.Inner.TextChanged += delegate { OnArgsChanged(); };
-            _boxUrl.Inner.TextChanged += delegate { if (_batch == null) ResetFormats(); };
-            _boxUrl.Inner.Click += delegate { if (_batch != null) OpenBatch(); };
+            _boxUrl.Inner.TextChanged += delegate { if (!UrlsFileActive()) ResetFormats(); };
             _boxPath.Inner.Leave += delegate { SavePath(); };
             _btnBatch.Click += delegate { OpenBatch(); };
             _btnSave.Click += OnSaveArgs;
@@ -1518,39 +1521,141 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         }
 
         // -------------------------------------------------------------- 批量 / 網址
-        private List<string> GetUrls()
+        private string UrlsPath()
         {
-            if (_batch != null) return new List<string>(_batch);
-            List<string> urls = new List<string>();
-            string u = _boxUrl.Inner.Text.Trim();
-            if (u.Length > 0) urls.Add(u);
-            return urls;
+            return Path.Combine(_cfg.ExeDir, "media-downloader-urls.txt");
         }
 
-        private void OpenBatch()
+        // urls 檔裡有可下載的網址 = urls 模式（下載以檔案為準）
+        private bool UrlsFileActive()
         {
-            string initial = _batch != null ? string.Join("\r\n", _batch.ToArray()) : _boxUrl.Inner.Text.Trim();
-            string res = PromptDialog.Ask(this, Font, "批量輸入", "一行一個網址（按「完成」才會記住；清空後完成 = 取消批量模式）", initial, true);
-            if (res == null) return;
-            List<string> list = new List<string>();
-            foreach (string l in res.Replace("\r", "").Split('\n'))
-                if (l.Trim().Length > 0) list.Add(l.Trim());
+            return ParseUrls(UrlsPath()).Count > 0;
+        }
 
-            if (list.Count <= 1)
+        private string EnsureUrlsFile()
+        {
+            string p = UrlsPath();
+            if (!File.Exists(p))
             {
-                _batch = null;
-                _boxUrl.Inner.ReadOnly = false;
-                _boxUrl.Inner.ForeColor = Theme.Text;
-                _boxUrl.Inner.Text = list.Count == 1 ? list[0] : "";
+                try { File.WriteAllText(p, "", new UTF8Encoding(false)); }
+                catch { }
+            }
+            return p;
+        }
+
+        // http/https、一行一個（或以空白分隔）、# 開頭為註解、去重
+        private static List<string> ParseUrls(string file)
+        {
+            List<string> list = new List<string>();
+            string text;
+            try
+            {
+                if (!File.Exists(file)) return list;
+                text = File.ReadAllText(file, Encoding.UTF8);
+            }
+            catch { return list; }
+            if (text.Length > 0 && text[0] == '\uFEFF') text = text.Substring(1);
+
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string raw in text.Split(new char[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string l = raw.Trim();
+                if (l.Length == 0 || l[0] == '#') continue;
+                Uri u;
+                if (!Uri.TryCreate(l, UriKind.Absolute, out u)) continue;
+                if (u.Scheme != Uri.UriSchemeHttp && u.Scheme != Uri.UriSchemeHttps) continue;
+                if (seen.Add(l)) list.Add(l);
+            }
+            return list;
+        }
+
+        // 編輯器關掉後：空檔刪除；非空保留。依檔案狀態同步網址框顯示
+        private static void DropUrlsIfEmpty(string file)
+        {
+            try
+            {
+                if (!File.Exists(file)) return;
+                if (File.ReadAllText(file, Encoding.UTF8).Trim().Length == 0) File.Delete(file);
+            }
+            catch { }
+        }
+
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            CloseEditorSession();
+        }
+
+        private void CloseEditorSession()
+        {
+            if (!_editorSession) return;
+            _editorSession = false;
+            DropUrlsIfEmpty(UrlsPath());
+            UpdateUrlBox();
+        }
+
+        private void UpdateUrlBox()
+        {
+            bool active = UrlsFileActive();
+            if (active == _boxUrl.Inner.ReadOnly) return;
+            if (active)
+            {
+                _boxUrl.Inner.ReadOnly = true;
+                _boxUrl.Inner.ForeColor = Theme.Dim;
+                _boxUrl.Inner.Text = "已從 urls 檔載入 " + ParseUrls(UrlsPath()).Count + " 個網址";
             }
             else
             {
-                _batch = list;
-                _boxUrl.Inner.ReadOnly = true;
-                _boxUrl.Inner.ForeColor = Theme.Dim;
-                _boxUrl.Inner.Text = "已設定為批量模式：共 " + list.Count + " 個網址（一行一個，點此編輯）";
+                _boxUrl.Inner.ReadOnly = false;
+                _boxUrl.Inner.ForeColor = Theme.Text;
+                _boxUrl.Inner.Text = "";
             }
-            ResetFormats();
+        }
+
+        private List<string> GetUrls()
+        {
+            List<string> urls = ParseUrls(UrlsPath());   // urls 檔非空 → 以檔案為準
+            if (urls.Count > 0) return urls;
+            List<string> list = new List<string>();
+            string u = _boxUrl.Inner.Text.Trim();
+            if (u.Length > 0) list.Add(u);
+            return list;
+        }
+
+        // 用外部編輯器（設定頁可改，預設 notepad）開啟 urls 檔
+        private void OpenBatch()
+        {
+            string file = EnsureUrlsFile();
+            if (!File.Exists(file)) { MessageBox.Show(this, "無法建立 urls 檔：\r\n" + file, Text); return; }
+
+            string ed = (_cfg.Editor ?? "").Trim();
+            if (ed.Length == 0) ed = "notepad";
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo(ed, "\"" + file + "\"");
+                psi.UseShellExecute = true;
+                psi.WorkingDirectory = _cfg.ExeDir;
+                Process proc = Process.Start(psi);
+                _editorSession = true;
+                if (proc != null)
+                {
+                    try
+                    {
+                        proc.EnableRaisingEvents = true;
+                        proc.Exited += delegate
+                        {
+                            try { BeginInvoke(new Action(delegate() { CloseEditorSession(); })); }
+                            catch { }
+                        };
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                _editorSession = false;
+                MessageBox.Show(this, "無法開啟編輯工具（" + ed + "）：\r\n" + ex.Message, Text);
+            }
         }
 
         // -------------------------------------------------------------- 下載路徑
@@ -1724,7 +1829,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         {
             if (_listing || !_yt.Found) return;
             List<string> urls = GetUrls();
-            if (urls.Count == 0) { MessageBox.Show(this, "請先輸入影片網址。", Text); return; }
+            if (urls.Count == 0) { MessageBox.Show(this, "請先輸入網址。", Text); return; }
             string url = urls[0];
             string exe = _yt.Exe;
             _listing = true; UpdateEnabled();
@@ -1893,7 +1998,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         private void OnDownload(object sender, EventArgs e)
         {
             List<string> urls = GetUrls();
-            if (urls.Count == 0) { MessageBox.Show(this, "請先輸入影片網址（或用「批量輸入」貼上多個）。", Text); return; }
+            if (urls.Count == 0) { MessageBox.Show(this, "請先輸入網址（或用「批量輸入」編輯 urls 檔）。", Text); return; }
             string args = ArgsText.Norm(_boxArgs.Inner.Text);
 
             if (!_ff.Found)
