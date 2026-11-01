@@ -69,6 +69,7 @@ export EDITOR=notepad.exe
 shopt -s histappend
 # 忽略重複指令、忽略開頭有空格的指令
 export HISTCONTROL=ignoreboth
+# 關閉 MSYS 自動路徑轉換：原因與影響見 ./docs/msys-no-pathconv.md
 export MSYS_NO_PATHCONV=1
 '@ -replace "`r`n", "`n"
 
