@@ -1,6 +1,6 @@
-// media-downloader.selftest.cs — media-downloader 的純函數自我測試（開發用，可選檔）
+// test/media-downloader.selftest.cs — media-downloader 的純函數自我測試（開發用，可選檔）
 //
-// 編譯：csc-build.cmd media-downloader.selftest.cs media-downloader.cs
+// 編譯：csc-build.cmd test/media-downloader.selftest.cs media-downloader.cs
 //       （測試檔必須放第一個：檔內的 csc-variant 行會帶出 SELFTEST 定義，
 //        產出主控台版 media-downloader-selftest.exe；主檔單獨建置時測試碼完全不編入）
 // 執行：media-downloader-selftest.exe --selftest   （不開視窗、不碰網路；結束碼 0 = 全部通過）

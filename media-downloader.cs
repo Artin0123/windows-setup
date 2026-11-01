@@ -2,7 +2,7 @@
 //
 // 編譯：把本檔拖到 csc-build.cmd 上，或  csc-build.cmd /nopause media-downloader.cs
 //
-// 開發／測試：csc-build.cmd media-downloader.selftest.cs media-downloader.cs
+// 開發／測試：csc-build.cmd test/media-downloader.selftest.cs media-downloader.cs
 //             （測試檔放第一個；會產出主控台版 media-downloader-selftest.exe）
 //             執行：media-downloader-selftest.exe --selftest   （結束碼 0 = 全部通過）
 //
@@ -58,7 +58,7 @@ namespace MediaDownloader
                 try { AppIcon.WriteIco(args[1]); return 0; } catch { return 1; }
             }
 
-            // 純函數自我測試：僅在 SELFTEST 定義時編入（一般建置不影響，見 media-downloader.selftest.cs）
+            // 純函數自我測試：僅在 SELFTEST 定義時編入（一般建置不影響，見 test/media-downloader.selftest.cs）
 #if SELFTEST
             if (args != null && args.Length == 1 && args[0] == "--selftest")
                 return SelfTest.RunAll();

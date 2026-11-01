@@ -45,8 +45,8 @@
 - 安全修復：yt-dlp 下載改用 --batch-file（%TEMP% 暫存檔）遞交網址，網址不再進 cmd 命令列
   （原 Quote 的 \" 在 cmd 會提前閉合引號，網址內的 & 會變成命令分隔符 = 命令注入）；
   另 ParseUrls / GetUrls 對網址內的 " 一律轉 %22（防禦縱深）。新增 `--selftest` 純函數回歸測試
-  （測試本體在 media-downloader.selftest.cs，開發時才編入：
-  `csc-build.cmd media-downloader.selftest.cs media-downloader.cs` → media-downloader-selftest.exe；
+  （測試本體在 test/media-downloader.selftest.cs，開發時才編入：
+  `csc-build.cmd test/media-downloader.selftest.cs media-downloader.cs` → media-downloader-selftest.exe；
   主檔單獨建置不受影響，setup.ps1 不需改）。
 - 預設 `aria2Args` 是 yt-dlp 用的寫法（--downloader aria2c …）；只用 aria2c 直接下載時需自行改成原生參數（模板註解已說明）。
   → 後改（調整 8）：整個 aria2Args 機制移除，aria2c 參數改由參數列自行填寫。
