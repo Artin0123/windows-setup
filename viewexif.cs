@@ -13,12 +13,11 @@ using System.Windows.Forms;
 using System.Runtime.InteropServices;
 
 namespace viewexif {
-  // kind: 0 text, 1 key, 2 value, 3 section header, 4 dim punctuation
-  class Seg { public string T; public int K; public Seg(string t, int k) { T = t; K = k; } }
+  class Seg { public string T; public Seg(string t) { T = t; } }
   class Line {
     public int Lv; public List<Seg> S = new List<Seg>();
     public Line(int lv) { Lv = lv; }
-    public Line Add(string t, int k) { S.Add(new Seg(t, k)); return this; }
+    public Line Add(string t) { S.Add(new Seg(t)); return this; }
     public string Plain() {
       StringBuilder b = new StringBuilder(new string(' ', Lv * 2));
       foreach (Seg s in S) b.Append(s.T);
@@ -31,10 +30,7 @@ namespace viewexif {
     public float Size = 11f;         // points, same as rclone-operator
     public bool Wrap = true;
     public Color Bg = Color.FromArgb(30, 30, 30), Fg = Color.FromArgb(225, 225, 225),
-      Key = Color.FromArgb(127, 200, 248), Value = Color.FromArgb(168, 216, 160),
-      Section = Color.FromArgb(255, 158, 100), Dim = Color.FromArgb(122, 122, 122),
-      Done = Color.FromArgb(80, 200, 120),
-      Bar = Color.FromArgb(37, 37, 38);
+      Key = Color.FromArgb(127, 200, 248);
     public int X = int.MinValue, Y = 0, W = 840, H = 640;
 
     static string Hex(Color c) { return (c.R << 16 | c.G << 8 | c.B).ToString("X6"); }
@@ -67,11 +63,6 @@ namespace viewexif {
           case "bg": Bg = ParseColor(v, Bg); break;
           case "fg": Fg = ParseColor(v, Fg); break;
           case "key_color": Key = ParseColor(v, Key); break;
-          case "value_color": Value = ParseColor(v, Value); break;
-          case "section_color": Section = ParseColor(v, Section); break;
-          case "dim_color": Dim = ParseColor(v, Dim); break;
-          case "done_color": Done = ParseColor(v, Done); break;
-          case "toolbar_bg": Bar = ParseColor(v, Bar); break;
           case "x": if (int.TryParse(v, out n)) X = n; break;
           case "y": if (int.TryParse(v, out n)) Y = n; break;
           case "width": if (int.TryParse(v, out n) && n > 200) W = n; break;
@@ -89,10 +80,7 @@ namespace viewexif {
       s.AppendLine("wrap=" + (Wrap ? "true" : "false"));
       s.AppendLine("[colors]");
       s.AppendLine("bg=" + Hex(Bg)); s.AppendLine("fg=" + Hex(Fg));
-      s.AppendLine("key_color=" + Hex(Key)); s.AppendLine("value_color=" + Hex(Value));
-      s.AppendLine("section_color=" + Hex(Section)); s.AppendLine("dim_color=" + Hex(Dim));
-      s.AppendLine("done_color=" + Hex(Done));
-      s.AppendLine("toolbar_bg=" + Hex(Bar));
+      s.AppendLine("key_color=" + Hex(Key));
       s.AppendLine("[window]");
       s.AppendLine("x=" + X); s.AppendLine("y=" + Y); s.AppendLine("width=" + W); s.AppendLine("height=" + H);
       File.WriteAllText(path, s.ToString(), new UTF8Encoding(false));
@@ -100,7 +88,7 @@ namespace viewexif {
   }
 
   // ===================== owner-drawn viewer (exact layout, no RichEdit) =====================
-  class VSeg { public int X; public string T; public int K; public int Off; }
+  class VSeg { public int X; public string T; public int Off; }
   class VLine { public int Y; public List<VSeg> S = new List<VSeg>(); }
   class Row {
     public string Key, Copy, Val;   // Val = value text, logical lines joined by \n (selection/offset space)
@@ -119,14 +107,12 @@ namespace viewexif {
     public HScrollBar HS = new HScrollBar();
     public Action OnToggleWrap, OnOpenIni;
 
-    Font fN, fB, fW;
-    int lh, padL, padT, padR, padB, btnW, btnH, iconCol, keyW, lvPx, rowGap, valueX, contentMax;
+    Font fN, fW;
+    int lh, padL, padT, padR, padB, keyW, lvPx, rowGap, valueX, contentMax;
     float scale = 1f;
     int scrollY, scrollX;
     Rectangle wrapRect, iniRect;
-    int hover = -1;            // -2 = wrap button, >=0 = copy button of that row
-    int doneRow = -1;
-    Timer doneTimer = new Timer();
+    bool hoverWrap, hoverIni;
     bool inLayout;
 
     public Viewer(Cfg c, List<Row> rows) {
@@ -135,8 +121,6 @@ namespace viewexif {
                ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
       TabStop = true;
       BackColor = c.Bg;
-      doneTimer.Interval = 1200;
-      doneTimer.Tick += delegate { doneTimer.Stop(); doneRow = -1; Invalidate(); };
       VS.Dock = DockStyle.Right;
       HS.Dock = DockStyle.Bottom;
       VS.ValueChanged += delegate { if (!inLayout) { scrollY = VS.Value; Invalidate(); } };
@@ -175,22 +159,19 @@ namespace viewexif {
       if (Width < 50 || Height < 50) return;
       inLayout = true;
       using (Graphics g = CreateGraphics()) scale = g.DpiX / 96f;
-      if (fN != null) { fN.Dispose(); fB.Dispose(); fW.Dispose(); }
+      if (fN != null) { fN.Dispose(); fW.Dispose(); }
       overhang.Clear();
       fN = new Font(C.Font, C.Size);
-      fB = new Font(C.Font, C.Size, FontStyle.Bold);
       fW = new Font(C.Font, 10f);
       lh = fN.Height;
       padL = (int)(26 * scale); padT = (int)(28 * scale); padR = (int)(14 * scale); padB = (int)(20 * scale);
       rowGap = (int)(16 * scale);
-      btnH = lh + (int)(4 * scale); btnW = btnH + (int)(6 * scale);
-      iconCol = btnW + (int)(14 * scale);
-      lvPx = (int)Math.Round(C.Size * scale * 96f / 72f * 1.6f);
+      lvPx = Meas("  ", fN);   // one level = 2 spaces of the value font, so screen indent == Plain() copied text
 
       int maxKey = 0;
       foreach (Row r in Rows) { int w = Meas(r.Key, fN); if (w > maxKey) maxKey = w; }
       keyW = Math.Min(maxKey, (int)(Width * 0.42f)) + (int)(18 * scale);
-      valueX = padL + iconCol + keyW;
+      valueX = padL + keyW;
 
       Size ts = TextRenderer.MeasureText("Wrap: OFF", fW, new Size(1 << 20, 1 << 10), TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
       int ww = ts.Width + (int)(36 * scale), wh = ts.Height + (int)(16 * scale);
@@ -198,7 +179,6 @@ namespace viewexif {
       iniRect = new Rectangle(wrapRect.X - wh - (int)(10 * scale), padT, wh, wh);   // square gear button
 
       int sp = Math.Max(1, Meas("a a", fN) - Meas("aa", fN));
-      int spB = Math.Max(1, Meas("a a", fB) - Meas("aa", fB));
       int avail0 = C.Wrap ? Math.Max(120, Width - valueX - padR) : (1 << 28);
       contentMax = 0;
 
@@ -211,36 +191,34 @@ namespace viewexif {
         foreach (Line ln in r.Lines) {
           int indent = ln.Lv * lvPx, x = indent;
           VLine vl = new VLine(); vl.Y = vy; r.VL.Add(vl);
-          int segBase = 0, wrapX = indent;   // wrapX: where continuation lines start
+          int segBase = 0;   // source offset of the current segment inside the line (for selection offsets)
           foreach (Seg sg in ln.S) {
-            // "key: value" lines: wrapped value text lines up under the start of the value (hanging indent)
-            if (sg.K == 2 && segBase > 0 && wrapX == indent && x - indent <= (Math.Min(avail, 1 << 20) - indent) / 2) wrapX = x;
-            Font f = sg.K == 3 ? fB : fN;
-            int spw = sg.K == 3 ? spB : sp;
+            Font f = fN;
+            int spw = sp;
             foreach (Match m in Regex.Matches(sg.T, @"\s+|\S+")) {
               string tk = m.Value;
               bool isSp = char.IsWhiteSpace(tk[0]);
               int w = isSp ? spw * tk.Length : Meas(tk, f);
               if (C.Wrap && x + w > avail) {
                 if (isSp) continue;
-                if (x > wrapX) { vy += lh; vl = new VLine(); vl.Y = vy; r.VL.Add(vl); x = wrapX; }
+                if (x > indent) { vy += lh; vl = new VLine(); vl.Y = vy; r.VL.Add(vl); x = indent; }
                 if (x + w > avail) {
                   // token longer than a whole line (paths, hashes): break it by measured prefixes
                   int pos = 0;
                   while (pos < tk.Length) {
                     int n = FitCount(tk, pos, f, avail - x);
                     if (n < 1) n = 1;
-                    VSeg s1 = new VSeg(); s1.X = x; s1.T = tk.Substring(pos, n); s1.K = sg.K; s1.Off = lineBase + segBase + m.Index + pos; vl.S.Add(s1);
+                    VSeg s1 = new VSeg(); s1.X = x; s1.T = tk.Substring(pos, n); s1.Off = lineBase + segBase + m.Index + pos; vl.S.Add(s1);
                     int w1 = Meas(s1.T, f);
                     pos += n;
                     if (x + w1 > contentMax) contentMax = x + w1;
-                    if (pos < tk.Length) { vy += lh; vl = new VLine(); vl.Y = vy; r.VL.Add(vl); x = wrapX; }
+                    if (pos < tk.Length) { vy += lh; vl = new VLine(); vl.Y = vy; r.VL.Add(vl); x = indent; }
                     else x += w1;
                   }
                   continue;
                 }
               }
-              VSeg s = new VSeg(); s.X = x; s.T = tk; s.K = sg.K; s.Off = lineBase + segBase + m.Index; vl.S.Add(s);
+              VSeg s = new VSeg(); s.X = x; s.T = tk; s.Off = lineBase + segBase + m.Index; vl.S.Add(s);
               x += w;
               if (x > contentMax) contentMax = x;
             }
@@ -292,7 +270,7 @@ namespace viewexif {
     bool dragging;
     int curKind;                 // 0 default, 1 hand, 2 text
 
-    int KeyX() { return padL + iconCol; }
+    int KeyX() { return padL; }
 
     int RowAtY(int y) {
       for (int i = 0; i < Rows.Count; i++)
@@ -324,7 +302,7 @@ namespace viewexif {
       if (vl.S.Count == 0) return 0;
       int tx = p.X - valueX + scrollX;
       foreach (VSeg sg in vl.S) {
-        Font f = sg.K == 3 ? fB : fN;
+        Font f = fN;
         int w = Meas(sg.T, f);
         if (tx < sg.X) return sg.Off;
         if (tx <= sg.X + w) return sg.Off + CharAtX(sg.T, sg.X, tx, f);
@@ -373,7 +351,7 @@ namespace viewexif {
 
     // draw part of a segment with the selection background behind chars [a, b) (offsets inside seg.T)
     void DrawSegSel(Graphics g, VSeg sg, int sx, int ly, Color fore, int a, int b, TextFormatFlags tf) {
-      Font f = sg.K == 3 ? fB : fN;
+      Font f = fN;
       string t = sg.T;
       int xa = sx + Meas(t.Substring(0, a), f), xb = sx + Meas(t.Substring(0, b), f);
       if (a > 0) TextRenderer.DrawText(g, t.Substring(0, a), f, new Point(sx, ly), fore, C.Bg, tf);
@@ -384,21 +362,9 @@ namespace viewexif {
       if (b < t.Length) TextRenderer.DrawText(g, t.Substring(b), f, new Point(xb, ly), fore, C.Bg, tf);
     }
 
-    Rectangle BtnRect(Row r) {
-      return new Rectangle(padL, r.Top - scrollY + (lh - btnH) / 2, btnW, btnH);
-    }
-
-    int HitTest(Point p) {
-      if (wrapRect.Contains(p)) return -2;
-      if (iniRect.Contains(p)) return -3;
-      for (int i = 0; i < Rows.Count; i++) {
-        Row r = Rows[i];
-        int ry = r.Top - scrollY;
-        if (ry > Height) break;
-        if (ry + r.H < 0) continue;
-        if (BtnRect(r).Contains(p)) return i;
-      }
-      return -1;
+    // hit-test: only the two toolbar buttons (wrap toggle, ini reveal)
+    bool OverToolbar(Point p) {
+      return wrapRect.Contains(p) || iniRect.Contains(p);
     }
 
     protected override void OnResize(EventArgs e) { base.OnResize(e); DoLayout(); }
@@ -411,37 +377,29 @@ namespace viewexif {
           int ri = RowAtY(e.Y);
           sR2 = ri; sO2 = ValOffset(Rows[ri], e.Location);
         } else if (selMode == 1) {
-          sO2 = CharAtX(Rows[sR1].Key, KeyX(), e.X, fN); sR2 = sR1;
+          sO2 = CharAtX(Rows[sR1].Key, KeyX() - scrollX, e.X, fN); sR2 = sR1;
         }
         Invalidate();
         return;
       }
-      int h = HitTest(e.Location);
-      int kind = h != -1 ? 1 : (e.X >= KeyX() ? 2 : 0);
+      bool overWrap = wrapRect.Contains(e.Location), overIni = iniRect.Contains(e.Location);
+      int kind = (overWrap || overIni) ? 1 : (e.X >= KeyX() ? 2 : 0);
       if (kind != curKind) {
         curKind = kind;
         Cursor = kind == 1 ? Cursors.Hand : (kind == 2 ? Cursors.IBeam : Cursors.Default);
       }
-      if (h != hover) { hover = h; Invalidate(); }
+      if (overWrap != hoverWrap || overIni != hoverIni) { hoverWrap = overWrap; hoverIni = overIni; Invalidate(); }
     }
     protected override void OnMouseLeave(EventArgs e) {
       base.OnMouseLeave(e);
-      if (hover != -1) { hover = -1; Cursor = Cursors.Default; Invalidate(); }
+      if (hoverWrap || hoverIni) { hoverWrap = hoverIni = false; Cursor = Cursors.Default; Invalidate(); }
     }
     protected override void OnMouseDown(MouseEventArgs e) {
       base.OnMouseDown(e);
       Focus();
       if (e.Button != MouseButtons.Left) return;
-      int h = HitTest(e.Location);
-      if (h == -2) { if (OnToggleWrap != null) OnToggleWrap(); return; }
-      if (h == -3) { if (OnOpenIni != null) OnOpenIni(); return; }
-      if (h >= 0) {
-        string t = Rows[h].Copy;
-        try { Clipboard.SetText(t.Length > 0 ? t : " "); } catch { return; }
-        doneRow = h; doneTimer.Stop(); doneTimer.Start();
-        Invalidate();
-        return;
-      }
+      if (wrapRect.Contains(e.Location)) { if (OnToggleWrap != null) OnToggleWrap(); return; }
+      if (iniRect.Contains(e.Location)) { if (OnOpenIni != null) OnOpenIni(); return; }
       selMode = 0; dragging = false;
       if (Rows.Count > 0) {
         int ri = RowAtY(e.Y);
@@ -450,7 +408,7 @@ namespace viewexif {
         } else if (e.X >= KeyX()) {
           Row r = Rows[ri];
           if (e.Y >= r.Top - scrollY && e.Y < r.Top - scrollY + lh) {
-            selMode = 1; sR1 = sR2 = ri; sO1 = sO2 = CharAtX(r.Key, KeyX(), e.X, fN); dragging = true;
+            selMode = 1; sR1 = sR2 = ri; sO1 = sO2 = CharAtX(r.Key, KeyX() - scrollX, e.X, fN); dragging = true;
           }
         }
       }
@@ -459,7 +417,7 @@ namespace viewexif {
     protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); dragging = false; }
     protected override void OnMouseDoubleClick(MouseEventArgs e) {
       base.OnMouseDoubleClick(e);
-      if (e.Button != MouseButtons.Left || Rows.Count == 0 || HitTest(e.Location) != -1) return;
+      if (e.Button != MouseButtons.Left || Rows.Count == 0 || OverToolbar(e.Location)) return;
       int ri = RowAtY(e.Y);
       Row r = Rows[ri];
       if (e.X >= valueX) {
@@ -515,63 +473,50 @@ namespace viewexif {
       return p;
     }
 
-    // mode 0 = text button, 1 = copy icon, 2 = green check, 3 = gear
-    void DrawBtn(Graphics g, Rectangle b, int mode, bool hot, string text, Color fore) {
+    void DrawBtnFrame(Graphics g, Rectangle b, bool hot) {
       g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-      Color border = mode == 2 ? C.Done : Color.FromArgb(75, 75, 78);
+      Color border = Color.FromArgb(75, 75, 78);
       Color fillCol = hot ? Color.FromArgb(62, 62, 66) : Color.FromArgb(42, 42, 45);
       RectangleF r = new RectangleF(b.X + 0.5f, b.Y + 0.5f, b.Width - 1, b.Height - 1);
       using (System.Drawing.Drawing2D.GraphicsPath gp = RoundPath(r, 6 * scale))
       using (SolidBrush fill = new SolidBrush(fillCol))
       using (Pen pen = new Pen(border, 1f)) { g.FillPath(fill, gp); g.DrawPath(pen, gp); }
-      float cx = b.X + b.Width / 2f, cy = b.Y + b.Height / 2f;
-      if (mode == 1) {
-        float s = Math.Min(b.Width, b.Height) * 0.36f, o = s * 0.28f;
-        using (Pen p = new Pen(Color.FromArgb(185, 185, 190), 1.4f))
-        using (SolidBrush fill = new SolidBrush(fillCol)) {
-          g.DrawRectangle(p, cx - s / 2 - o, cy - s / 2 - o, s, s);
-          g.FillRectangle(fill, cx - s / 2 + o, cy - s / 2 + o, s, s);
-          g.DrawRectangle(p, cx - s / 2 + o, cy - s / 2 + o, s, s);
-        }
-      } else if (mode == 3) {
-        // six-tooth "shield" gear, solid with a hollow hub (same shape as rclone-operator)
-        GearShape.Fill(g, hot ? Color.FromArgb(230, 230, 230) : Color.FromArgb(160, 162, 168), cx, cy, Math.Min(b.Width, b.Height) * 0.66f);
-      } else if (mode == 2) {
-        float w = b.Width, h = b.Height;
-        using (Pen p = new Pen(C.Done, 2.2f)) {
-          p.StartCap = System.Drawing.Drawing2D.LineCap.Round; p.EndCap = System.Drawing.Drawing2D.LineCap.Round;
-          p.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
-          g.DrawLines(p, new PointF[] {
-            new PointF(b.X + w * 0.28f, b.Y + h * 0.52f), new PointF(b.X + w * 0.44f, b.Y + h * 0.68f), new PointF(b.X + w * 0.74f, b.Y + h * 0.32f) });
-        }
-      }
+    }
+
+    void DrawTextBtn(Graphics g, Rectangle b, bool hot, string text, Color fore) {
+      DrawBtnFrame(g, b, hot);
       g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
-      if (mode == 0)
-        TextRenderer.DrawText(g, text, fW, b, fore,
-          TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+      TextRenderer.DrawText(g, text, fW, b, fore,
+        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+    }
+
+    void DrawGearBtn(Graphics g, Rectangle b, bool hot) {
+      DrawBtnFrame(g, b, hot);
+      float cx = b.X + b.Width / 2f, cy = b.Y + b.Height / 2f;
+      // six-tooth "shield" gear, solid with a hollow hub (same shape as rclone-operator)
+      GearShape.Fill(g, hot ? Color.FromArgb(230, 230, 230) : Color.FromArgb(160, 162, 168), cx, cy, Math.Min(b.Width, b.Height) * 0.66f);
+      g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
     }
 
     protected override void OnPaint(PaintEventArgs e) {
       Graphics g = e.Graphics;
       g.Clear(C.Bg);
       if (fN == null) return;
-      Color[] kc = { C.Fg, C.Key, C.Value, C.Section, C.Dim };
       TextFormatFlags tf = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
-      Rectangle valueClip = new Rectangle(valueX, 0, Math.Max(1, Width - valueX), Height);
+      // keys and values shift together with scrollX (no fixed columns); control clipping bounds the drawing
+      int keyScreenX = KeyX() - scrollX;
       for (int i = 0; i < Rows.Count; i++) {
         Row r = Rows[i];
         int ry = r.Top - scrollY;
         if (ry > Height) break;
         if (ry + r.H < 0) continue;
-        DrawBtn(g, BtnRect(r), doneRow == i ? 2 : 1, hover == i, null, C.Fg);
         if (selMode == 1 && sR1 == i && sO1 != sO2) {
           int ka = Math.Min(sO1, sO2), kb = Math.Min(Math.Max(sO1, sO2), r.Key.Length);
-          int kx1 = KeyX() + Meas(r.Key.Substring(0, ka), fN), kx2 = KeyX() + Meas(r.Key.Substring(0, kb), fN);
+          int kx1 = keyScreenX + Meas(r.Key.Substring(0, ka), fN), kx2 = keyScreenX + Meas(r.Key.Substring(0, kb), fN);
           using (SolidBrush br = new SolidBrush(SelBg)) g.FillRectangle(br, kx1, ry, Math.Max(1, kx2 - kx1), lh);
         }
-        TextRenderer.DrawText(g, r.Key, fN, new Rectangle(KeyX(), ry, keyW - (int)(8 * scale), lh), C.Key,
+        TextRenderer.DrawText(g, r.Key, fN, new Rectangle(keyScreenX, ry, keyW - (int)(8 * scale), lh), C.Key,
           (selMode == 1 && sR1 == i && sO1 != sO2) ? SelBg : C.Bg, tf | TextFormatFlags.EndEllipsis);
-        g.SetClip(valueClip);
         int s0 = 0, e0 = -1;
         if (selMode == 2) {
           int r1, o1, r2, o2; SelRange(out r1, out o1, out r2, out o2);
@@ -584,15 +529,14 @@ namespace viewexif {
             int sx = valueX - scrollX + sg.X;
             int a = Math.Max(s0, sg.Off) - sg.Off, b = Math.Min(e0, sg.Off + sg.T.Length) - sg.Off;
             if (e0 >= 0 && b > a && !(sR1 == sR2 && sO1 == sO2))
-              DrawSegSel(g, sg, sx, ly, kc[sg.K], Math.Max(0, a), Math.Min(sg.T.Length, b), tf);
+              DrawSegSel(g, sg, sx, ly, C.Fg, Math.Max(0, a), Math.Min(sg.T.Length, b), tf);
             else
-              TextRenderer.DrawText(g, sg.T, sg.K == 3 ? fB : fN, new Point(sx, ly), kc[sg.K], C.Bg, tf);
+              TextRenderer.DrawText(g, sg.T, fN, new Point(sx, ly), C.Fg, C.Bg, tf);
           }
         }
-        g.ResetClip();
       }
-      DrawBtn(g, iniRect, 3, hover == -3, null, C.Fg);
-      DrawBtn(g, wrapRect, 0, hover == -2, C.Wrap ? "Wrap: ON" : "Wrap: OFF",
+      DrawGearBtn(g, iniRect, hoverIni);
+      DrawTextBtn(g, wrapRect, hoverWrap, C.Wrap ? "Wrap: ON" : "Wrap: OFF",
         C.Wrap ? Color.FromArgb(130, 210, 255) : Color.FromArgb(200, 200, 200));
     }
   }
@@ -702,7 +646,13 @@ namespace viewexif {
       for (int ki = 0; ki < obj.Items.Count; ki++) {
         Row r = new Row();
         r.Key = JP.Decode(obj.Keys[ki]);
-        r.Lines = FormatValue(JP.NodeText(rawJson, obj.Items[ki]), cfg);
+        JNode vn = obj.Items[ki];
+        if (vn.Kind == 0 || vn.Kind == 1) {          // list-type tags arrive as real JSON arrays; structs are flattened by exiftool
+          r.Lines = new List<Line>();
+          EmitJson(vn, 0, null, r.Lines);
+        } else {
+          r.Lines = FormatValue(JP.NodeText(rawJson, vn));
+        }
         List<string> parts = new List<string>();
         foreach (Line ln in r.Lines) parts.Add(ln.Plain());
         r.Copy = string.Join("\r\n", parts.ToArray());
@@ -757,74 +707,57 @@ namespace viewexif {
     }
 
     // ===================== value formatting =====================
-    // Plain text is printed exactly as read. A { ... } / [ ... ] block is expanded into an indented tree
-    // only when it is a complete, strictly valid JSON value (no dependency on the text before it).
-    static List<Line> FormatValue(string text0, Cfg cfg) {
+    // The value is re-printed in JSON-formatter style only when the WHOLE trimmed value is one strictly
+    // valid JSON value (nothing before it, nothing after it). Anything else is kept exactly as read.
+    static List<Line> FormatValue(string text0) {
       List<Line> outp = new List<Line>();
       string text = text0.Trim();
       if (text.Length == 0) return outp;
 
       text = text.Replace("\r\n", "\n").Replace('\r', '\n');
 
-      StringBuilder cur = new StringBuilder();
-      int len = text.Length, i = 0;
-      while (i < len) {
-        char c = text[i];
-        if (c == '{' || c == '[') {
-          JNode node; int end;
-          if (JP.TryParseAt(text, i, out node, out end) && Worth(node)) {
-            FlushText(cur, outp, cfg);
-            Emit(node, 1, null, outp);
-            i = end;
-            while (i < len && text[i] == '\n') i++;
-            continue;
-          }
-        }
-        if (c == '\n') { FlushText(cur, outp, cfg); i++; continue; }
-        cur.Append(c); i++;
+      JNode node; int end;
+      if ((text[0] == '{' || text[0] == '[') && JP.TryParseAt(text, 0, out node, out end) && end == text.Length) {
+        EmitJson(node, 0, null, outp);
+        return outp;
       }
-      FlushText(cur, outp, cfg);
+
+      // Plain text is printed exactly as read from the file: its own line breaks are kept, nothing is inserted.
+      foreach (string part in text.Split('\n')) {
+        string s = part.TrimEnd();
+        if (s.Trim().Length == 0) continue;
+        outp.Add(new Line(0).Add(s));
+      }
       return outp;
     }
 
-    // Skip things that are valid JSON but not worth a tree: empty {} / [] and arrays of bare numbers/literals
-    // (e.g. "[1]" or "[1920, 1080]" read better inline).
-    static bool Worth(JNode n) {
-      if (n.Items.Count == 0) return false;
-      if (n.Kind == 0) return true;
-      foreach (JNode it in n.Items) if (it.Kind != 3) return true;
-      return false;
-    }
+    // ===================== JSON pretty-print (source tokens kept) =====================
+    // Like a standard JSON formatter: only empty containers stay on one line ({} / []); every non-empty
+    // container is split line by line. All original tokens are preserved: string escapes untouched,
+    // numbers not re-formatted, duplicate keys kept. No per-part coloring (plain kind 0).
 
-    // Plain text is printed exactly as read from the file: its own line breaks are kept, nothing is inserted.
-    static void FlushText(StringBuilder cur, List<Line> outp, Cfg cfg) {
-      string s = cur.ToString().TrimEnd();
-      cur.Length = 0;
-      if (s.Trim().Length == 0) return;
-      outp.Add(new Line(0).Add(s, 0));
-    }
-
-    // ===================== JSON tree -> indented lines, no brackets =====================
-    // Keys, strings and numbers are shown as written in the source (no unescaping, no number re-formatting,
-    // duplicate keys are all kept). Empty strings are shown as "" so they are not mistaken for "no value".
-    static string ScalarText(JNode n) {
-      if (n.Kind == 2 && n.Raw.Length == 0) return "\"\"";
-      if (n.Kind == 0) return "{}";
-      if (n.Kind == 1) return "[]";
+    // Compact source text of a scalar node, escapes preserved.
+    static string InlineText(JNode n) {
+      if (n.Kind == 2) return "\"" + n.Raw + "\"";
       return n.Raw;
     }
 
-    static void Emit(JNode n, int lv, string label, List<Line> outp) {
-      if ((n.Kind == 0 || n.Kind == 1) && n.Items.Count > 0) {
-        int clv = lv;
-        if (label != null) { outp.Add(new Line(lv).Add(label, 1).Add(":", 4)); clv = lv + 1; }
-        for (int i = 0; i < n.Items.Count; i++)
-          Emit(n.Items[i], clv, n.Kind == 0 ? n.Keys[i] : "#" + (i + 1), outp);
+    static void EmitJson(JNode n, int lv, string label, List<Line> outp) {
+      string head = label == null ? "" : "\"" + label + "\": ";
+      if (n.Kind == 0 || n.Kind == 1) {
+        bool isObj = n.Kind == 0;
+        if (n.Items.Count == 0) { outp.Add(new Line(lv).Add(head + (isObj ? "{}" : "[]"))); return; }
+        outp.Add(new Line(lv).Add(head + (isObj ? "{" : "[")));
+        for (int i = 0; i < n.Items.Count; i++) {
+          EmitJson(n.Items[i], lv + 1, isObj ? n.Keys[i] : null, outp);
+          if (i < n.Items.Count - 1) {
+            Line prev = outp[outp.Count - 1];
+            prev.S[prev.S.Count - 1].T += ",";   // comma on the same line as the item, JSON style
+          }
+        }
+        outp.Add(new Line(lv).Add(isObj ? "}" : "]"));
       } else {
-        Line ln = new Line(lv);
-        if (label != null) ln.Add(label, 1).Add(": ", 4);
-        ln.Add(ScalarText(n), 2);
-        outp.Add(ln);
+        outp.Add(new Line(lv).Add(head + InlineText(n)));
       }
     }
   }
