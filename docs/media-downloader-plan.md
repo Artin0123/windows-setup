@@ -1,6 +1,6 @@
 # media-downloader 計劃（yt-dlp-downloader.cs + file-dl.cs 部分內容合併）
 
-> 狀態：實作中。
+> 狀態：已完成。
 
 ## 進度
 
@@ -8,7 +8,13 @@
 - [x] Part 2：圖示改 file-dl 款（白箭頭 + 托盤，紅底）
 - [x] Part 3：批量輸入改外部編輯器（urls 檔、移除舊批量邏輯）
 - [x] Part 4：設定分頁（偵測列勾選框、aria2c 參數 / 批量輸入編輯器文字框）
-- [ ] Part 5：下載分流（aria2c 直接下載）、格式列表禁用、ini 模板與「檔案下載」option
+- [x] Part 5：下載分流（aria2c 直接下載）、格式列表禁用、ini 模板與「檔案下載」option
+
+## 完成備註
+
+- 冒煙測試：`csc-build.cmd` 編譯 OK（含 --make-ico 圖示產生）；啟動 exe 自動產生 media-downloader.ini，模板含新 key（aria2Enabled=0 / ytdlpEnabled=1 / editor）與「檔案下載」option。
+- 預設 `aria2Args` 是 yt-dlp 用的寫法（--downloader aria2c …）；只用 aria2c 直接下載時需自行改成原生參數（模板註解已說明）。
+- 舊 `yt-dlp-downloader.ini` 不自動遷移（計劃第 8 節）。
 
 ## 1. 檔案與更名
 

@@ -11,11 +11,15 @@
 //     影像 + 音訊可疊加（以 + 連接寫入 -f，-f 永遠排在參數最前面）；同類型只是切換
 //   · 分頁「參數管理」：參數項目表格（一次只能選一個），可新增 / 編輯 / 刪除
 //   · 分頁「設定」：開啟設定檔位置（檔案總管選取 media-downloader.ini）、
-//     yt-dlp / ffmpeg / aria2c 偵測狀態（PATH 或 ini 指定路徑）、aria2c 多線程加速開關
-//   · 依賴「按需禁用」：沒有 yt-dlp 才禁用下載 / 列出格式；沒有 ffmpeg 只在需要合併或轉檔時提醒
+//     yt-dlp / ffmpeg / aria2c 偵測狀態；yt-dlp / aria2c 左側可勾選（下載引擎）：
+//     勾 yt-dlp = 用 yt-dlp；同時勾 aria2c = aria2c 參數注入參數列加速；
+//     只勾 aria2c = 直接跑 aria2c 下載 urls 檔；另有 aria2c 參數與批量輸入編輯器設定
+//   · 依賴「按需禁用」：兩個引擎都沒有（或都沒勾）才禁用下載；格式列表需要 yt-dlp；
+//     沒有 ffmpeg 只在需要合併或轉檔時提醒
 //
 // ini（與 exe 同目錄，第一次執行自動產生）：
-//   uiFont / uiFontSize / ytdlp / ffmpeg / aria2c / outputDir / defaultArgs / aria2Enabled / aria2Args
+//   uiFont / uiFontSize / ytdlp / ffmpeg / aria2c / outputDir / defaultArgs
+//   aria2Args / editor / ytdlpEnabled / aria2Enabled
 //   option = 顯示名稱 | 參數字串      （可有多行；舊版 "| 0/1 | 0/1" 尾巴與 profile 行仍可讀入）
 
 using System;
@@ -182,6 +186,7 @@ aria2Args = --downloader aria2c --downloader-args ""aria2c:-x 16 -s 16 -k 1M""
 editor = notepad
 
 ; 參數管理  option = 顯示名稱 | 參數字串
+option = 檔案下載 | -o ""%(title)s.%(ext)s""
 option = 僅最佳音訊 | -f bestaudio
 option = 1080p 視訊 + 最佳音訊 | bestvideo[format_note*=1080p]+bestaudio
 option = 1080p mp4 視訊 + 最佳音訊 | bestvideo[format_note*=1080p][ext=mp4]+bestaudio
@@ -2033,7 +2038,14 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         }
 
         // -------------------------------------------------------------- 下載
+        // 勾 yt-dlp → yt-dlp 流程；只勾 aria2c → aria2c 直接下載 urls 檔
         private void OnDownload(object sender, EventArgs e)
+        {
+            if (YtEngineOn) DownloadWithYtDlp();
+            else if (_detected && _ar.Found && _lblDetAr.Checked) DownloadWithAria2c();
+        }
+
+        private void DownloadWithYtDlp()
         {
             List<string> urls = GetUrls();
             if (urls.Count == 0) { MessageBox.Show(this, "請先輸入網址（或用「批量輸入」編輯 urls 檔）。", Text); return; }
@@ -2070,6 +2082,44 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                 psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
                 if (_ar.Found && _ar.Exe.IndexOf('\\') >= 0)
                     psi.EnvironmentVariables["PATH"] = Path.GetDirectoryName(_ar.Exe) + ";" + psi.EnvironmentVariables["PATH"];
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "啟動下載失敗：\r\n" + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // 只勾 aria2c：新終端跑 aria2c 下載 urls 檔（下載位置不自動建立，與 file-dl 同）
+        private void DownloadWithAria2c()
+        {
+            if (ParseUrls(UrlsPath()).Count == 0)
+            {
+                MessageBox.Show(this, "urls 檔裡沒有可下載的網址（http/https，一行一個），請先按「批量輸入」編輯。", Text);
+                return;
+            }
+
+            SavePath();
+            string outDir = CurrentOutDir();
+            if (!Directory.Exists(outDir))
+            {
+                MessageBox.Show(this, "下載位置不存在（不會自動建立）：\r\n" + outDir, Text);
+                return;
+            }
+
+            StringBuilder cmd = new StringBuilder();
+            cmd.Append("chcp 65001 >nul & ");
+            cmd.Append(ArgsText.Quote(_ar.Exe));
+            if (_cfg.Aria2Args.Length > 0) cmd.Append(" " + _cfg.Aria2Args);
+            cmd.Append(" -d " + ArgsText.Quote(outDir));
+            cmd.Append(" -i " + ArgsText.Quote(UrlsPath()));
+            cmd.Append(" & echo. & pause");
+
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c " + cmd.ToString());
+                psi.UseShellExecute = false;
+                psi.WorkingDirectory = outDir;
                 Process.Start(psi);
             }
             catch (Exception ex)
