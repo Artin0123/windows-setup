@@ -1,6 +1,7 @@
 // viewexif - ExifTool metadata viewer (two columns: name | value)
 // Build: csc /nologo /target:winexe /r:System.Windows.Forms.dll /r:System.Drawing.dll /out:viewexif.exe viewexif.cs
 // Usage: viewexif.exe <image>      Config: viewexif-config.ini (next to the exe)
+// Selftest: csc-build.cmd test/viewexif.selftest.cs viewexif.cs  →  viewexif-selftest.exe --selftest
 using System;
 using System.IO;
 using System.Text;
@@ -33,14 +34,14 @@ namespace viewexif {
       Key = Color.FromArgb(127, 200, 248);
     public int X = int.MinValue, Y = 0, W = 840, H = 640;
 
-    static string Hex(Color c) { return (c.R << 16 | c.G << 8 | c.B).ToString("X6"); }
-    static Color ParseColor(string v, Color def) {
+    internal static string Hex(Color c) { return (c.R << 16 | c.G << 8 | c.B).ToString("X6"); }
+    internal static Color ParseColor(string v, Color def) {
       try {
         int n = Convert.ToInt32(v.Trim().TrimStart('#'), 16);
         return Color.FromArgb((n >> 16) & 255, (n >> 8) & 255, n & 255);
       } catch { return def; }
     }
-    static bool ParseBool(string v, bool def) {
+    internal static bool ParseBool(string v, bool def) {
       v = v.ToLowerInvariant();
       if (v == "true" || v == "1" || v == "yes" || v == "on") return true;
       if (v == "false" || v == "0" || v == "no" || v == "off") return false;
@@ -82,7 +83,8 @@ namespace viewexif {
       s.AppendLine("bg=" + Hex(Bg)); s.AppendLine("fg=" + Hex(Fg));
       s.AppendLine("key_color=" + Hex(Key));
       s.AppendLine("[window]");
-      s.AppendLine("x=" + X); s.AppendLine("y=" + Y); s.AppendLine("width=" + W); s.AppendLine("height=" + H);
+      if (X != int.MinValue) { s.AppendLine("x=" + X); s.AppendLine("y=" + Y); }   // 尚無座標時不寫 sentinel 值
+      s.AppendLine("width=" + W); s.AppendLine("height=" + H);
       File.WriteAllText(path, s.ToString(), new UTF8Encoding(false));
     }
   }
@@ -368,7 +370,7 @@ namespace viewexif {
     }
 
     protected override void OnResize(EventArgs e) { base.OnResize(e); DoLayout(); }
-    protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Focus(); }
+    // 不在 OnMouseEnter 撬焦點：滑鼠掠過就搶焦點太激進，需要鍵盤操作時點一下即可（OnMouseDown 會 Focus）
     protected override void OnMouseMove(MouseEventArgs e) {
       base.OnMouseMove(e);
       if (dragging && Rows.Count > 0) {
@@ -442,13 +444,8 @@ namespace viewexif {
       if (e.Control && e.KeyCode == Keys.A) { SelectAll(); e.Handled = true; return; }
       if (e.KeyCode == Keys.Escape && selMode != 0) { selMode = 0; Invalidate(); e.Handled = true; return; }
       if (e.Control && e.KeyCode == Keys.C) {
-        string t = SelectedText();
-        if (t.Length == 0) {
-          StringBuilder sb = new StringBuilder();
-          foreach (Row r in Rows) sb.AppendLine(r.Key + " : " + r.Copy.Replace("\r\n", "\r\n    "));
-          t = sb.ToString();
-        }
-        try { Clipboard.SetText(t); } catch { }
+        string t = SelectedText();   // 只有選取時才複製；無選取不做事（全複製已移除）
+        if (t.Length > 0) { try { Clipboard.SetText(t); } catch { } }
         e.Handled = true; return;
       }
       switch (e.KeyCode) {
@@ -542,6 +539,7 @@ namespace viewexif {
   }
 
   // Six-tooth shield gear: wide-root / narrow-tip trapezoid teeth, solid body, hub hole cut out.
+  // （形狀與 rclone-operator.cs 的齒輪同步；修改請兩邊一起改）
   static class GearShape {
     public static void Fill(Graphics g, Color c, float cx, float cy, float size) {
       float tipR = size * 0.50f, rootR = size * 0.36f, holeR = size * 0.17f;
@@ -582,6 +580,7 @@ namespace viewexif {
   }
 
   // Open Explorer on the file's folder with the file selected (in-process call, faster than explorer /select).
+  // （P/Invoke 與 rclone-operator.cs 同步；修改請兩邊一起改）
   static class ShellReveal {
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr ILCreateFromPathW(string pszPath);
@@ -614,8 +613,13 @@ namespace viewexif {
     static extern bool SetProcessDPIAware();
 
     [STAThread]
-    static void Main(string[] args) {
-      if (args.Length == 0 || !File.Exists(args[0])) return;
+    static int Main(string[] args) {
+#if SELFTEST
+      if (args != null && args.Length == 1 && args[0] == "--selftest")
+        return SelfTest.RunAll();   // 純函數自我測試，見 test/viewexif.selftest.cs
+#endif
+      if (args == null || args.Length == 0) { MessageBox.Show("用法：viewexif.exe <圖片檔>（也可把圖片拖放到本程式上）", "viewexif"); return 1; }
+      if (!File.Exists(args[0])) { MessageBox.Show("找不到檔案：\n" + args[0], "viewexif"); return 1; }
       string target = args[0];
       try { SetProcessDPIAware(); } catch { }   // avoids bitmap-scaled (blurry) text
       Application.EnableVisualStyles();
@@ -624,18 +628,35 @@ namespace viewexif {
       string rawJson = "";
       try {
         ProcessStartInfo psi = new ProcessStartInfo();
-        psi.FileName = "exiftool";
-        psi.Arguments = "-j -G1 -fast -charset UTF8 \"" + target + "\"";
+        string etExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "exiftool.exe");
+        psi.FileName = File.Exists(etExe) ? etExe : "exiftool";   // 優先用同目錄的 exiftool，避免 PATH / 工作目錄上的同名程式被攔截
+        psi.Arguments = "-j -G1 -fast -charset UTF8 \"" + target + "\"";   // Windows 檔名不能含 "，且上方 File.Exists 排除尾端 \，故無引號轉義注入
         psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
         psi.StandardOutputEncoding = Encoding.UTF8;
-        using (Process p = Process.Start(psi)) { rawJson = p.StandardOutput.ReadToEnd(); p.WaitForExit(); }
-      } catch { return; }
-      if (string.IsNullOrWhiteSpace(rawJson)) return;
+        using (Process p = Process.Start(psi)) {
+          var so = p.StandardOutput.ReadToEndAsync();   // 先非同步讀 stdout
+          p.StandardError.ReadToEndAsync();             // 同時排乾 stderr：只讀一邊時，另一邊管線塞滿會互相等待死鎖
+          if (!p.WaitForExit(30000)) {                  // 不加逾時的話 exiftool 掛住時程式會在開窗前無聲卡死
+            try { p.Kill(); } catch { }
+            MessageBox.Show("exiftool 沒有在 30 秒內完成，已中止。", "viewexif");
+            return 1;
+          }
+          rawJson = so.Result;
+        }
+      } catch {
+        MessageBox.Show("無法啟動 exiftool。請安裝 ExifTool 並加入 PATH，或在 viewexif.exe 同目錄放置 exiftool.exe。", "viewexif");
+        return 1;
+      }
+      if (string.IsNullOrWhiteSpace(rawJson)) { MessageBox.Show("exiftool 沒有輸出（可能是未支援的檔案格式）。", "viewexif"); return 1; }
 
       JNode root; int rootEnd;
-      if (!JP.TryParseAt(rawJson, 0, out root, out rootEnd) || root.Kind != 1 || root.Items.Count == 0 || root.Items[0].Kind != 0) return;
+      if (!JP.TryParseAt(rawJson, 0, out root, out rootEnd) || root.Kind != 1 || root.Items.Count == 0 || root.Items[0].Kind != 0) {
+        MessageBox.Show("無法解析 exiftool 的輸出。", "viewexif");
+        return 1;
+      }
       JNode obj = root.Items[0];
 
       string iniPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "viewexif-config.ini");
@@ -684,6 +705,7 @@ namespace viewexif {
         try { cfg.Save(iniPath); } catch { }
       };
       form.HandleCreated += delegate {
+        // 暗色標題列（與 rclone-operator.cs 同步；屬性 20/19 = immersive dark mode 的新舊編號）
         int dark = 1;
         DwmSetWindowAttribute(form.Handle, 20, ref dark, 4);
         DwmSetWindowAttribute(form.Handle, 19, ref dark, 4);
@@ -704,12 +726,13 @@ namespace viewexif {
       form.Controls.Add(v.HS);
       form.Shown += delegate { v.DarkScrollbars(); v.DoLayout(); v.Focus(); };
       Application.Run(form);
+      return 0;
     }
 
     // ===================== value formatting =====================
     // The value is re-printed in JSON-formatter style only when the WHOLE trimmed value is one strictly
     // valid JSON value (nothing before it, nothing after it). Anything else is kept exactly as read.
-    static List<Line> FormatValue(string text0) {
+    internal static List<Line> FormatValue(string text0) {
       List<Line> outp = new List<Line>();
       string text = text0.Trim();
       if (text.Length == 0) return outp;
@@ -722,7 +745,8 @@ namespace viewexif {
         return outp;
       }
 
-      // Plain text is printed exactly as read from the file: its own line breaks are kept, nothing is inserted.
+      // Plain text is printed exactly as read from the file: its own line breaks are kept, nothing is
+      // inserted. Blank lines are dropped so the viewer stays compact.
       foreach (string part in text.Split('\n')) {
         string s = part.TrimEnd();
         if (s.Trim().Length == 0) continue;
@@ -742,7 +766,7 @@ namespace viewexif {
       return n.Raw;
     }
 
-    static void EmitJson(JNode n, int lv, string label, List<Line> outp) {
+    internal static void EmitJson(JNode n, int lv, string label, List<Line> outp) {
       string head = label == null ? "" : "\"" + label + "\": ";
       if (n.Kind == 0 || n.Kind == 1) {
         bool isObj = n.Kind == 0;
@@ -872,7 +896,13 @@ namespace viewexif {
           case 't': sb.Append('\t'); break;
           case 'b': sb.Append('\b'); break;
           case 'f': sb.Append('\f'); break;
-          case 'u': sb.Append((char)Convert.ToInt32(raw.Substring(i + 1, 4), 16)); i += 4; break;
+          case 'u':
+            if (i + 4 < raw.Length) {
+              bool hex = true;
+              for (int k = 1; k <= 4; k++) if (!Uri.IsHexDigit(raw[i + k])) { hex = false; break; }
+              if (hex) { sb.Append((char)Convert.ToInt32(raw.Substring(i + 1, 4), 16)); i += 4; break; }
+            }
+            sb.Append(c).Append(e); break;   // 不完整的 \u：原樣保留（輸入未經 Str 驗證時不丢例外）
           default: sb.Append(e); break;   // \" \\ \/
         }
       }
