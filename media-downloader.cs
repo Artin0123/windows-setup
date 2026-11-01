@@ -175,6 +175,7 @@ editor = notepad
 option = 檔案下載 (限單獨 aria2c) | -o ""%(title)s.%(ext)s"" -x4 -s4 --max-tries=2 --connect-timeout=5 --timeout=5
 option = 僅最佳音訊 | -f bestaudio
 option = 最佳視訊和音訊 | bestvideo+bestaudio/best
+option = 最佳視訊和音訊 (aria2c 加速) | bestvideo+bestaudio/best --downloader aria2c --downloader-args ""aria2c:-x 16 -s 16 -k 1M""
 option = 1080p mp4 視訊 + 最佳音訊 | bestvideo[format_note*=1080p][ext=mp4]+bestaudio
 option = 下載縮圖 | --write-thumbnail --skip-download
 option = 下載所有字幕 | --write-all-subs --skip-download
@@ -218,8 +219,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                         && (p[end - 2].Trim() == "0" || p[end - 2].Trim() == "1")) end -= 2;
                     string args = string.Join("|", p, 1, end - 1).Trim();
                     if (name.Length == 0 || args.Length == 0) continue;
-                    // 舊版 aria2c 選項行（含 aria2c 字樣）不再支援，直接丟棄
-                    if (args.IndexOf("aria2c", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                     ArgOption o = new ArgOption();
                     o.Name = name; o.Args = args;
                     c.Options.Add(o);

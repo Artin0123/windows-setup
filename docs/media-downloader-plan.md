@@ -27,6 +27,11 @@
   「最佳視訊和音訊」（bestvideo+bestaudio/best，含 fallback）與
   「最佳視訊和音訊 (aria2c 加速)」（同上再加 --downloader aria2c …）
 - [x] 調整 10：移除「最佳視訊和音訊 (aria2c 加速)」選項（加速參數改由參數列自行填寫）
+  → 後改（誤解，收回）：調整 10 原意是回報「(aria2c 加速) 選項沒出現」，不是要刪除。
+  沒出現的原因：ini 讀取端有舊版遷移過濾器，凡 option 參數含 "aria2c" 字樣會被直接丟棄。
+- [x] 調整 11：移除該過濾器（option 一律照載），並在模板重新加上
+  「最佳視訊和音訊 (aria2c 加速)」= bestvideo+bestaudio/best --downloader aria2c
+  --downloader-args "aria2c:-x 16 -s 16 -k 1M"
 
 ## 完成備註
 
