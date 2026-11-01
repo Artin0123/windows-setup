@@ -1180,7 +1180,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _gridOptions = new GridList();
             _gridOptions.ShowCurrent = true;
             _gridOptions.DimFromColumn = 1;
-            _gridOptions.IsOn = delegate(object o) { ArgOption a = o as ArgOption; return a != null && _argsKey.Contains(a.Key); };
+            _gridOptions.IsOn = delegate(object o) { ArgOption a = o as ArgOption; return a != null && IsOptionOn(a); };
 
             _panel.Controls.Add(_btnAdd); _panel.Controls.Add(_btnEdit); _panel.Controls.Add(_btnDel);
             _panel.Controls.Add(_btnOpenIni); _panel.Controls.Add(_btnRedetect);
@@ -1468,6 +1468,16 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _gridFormats.Invalidate();
         }
 
+        // 選項是否命中：最長（最具體）者優先，避免「加速版」參數包含「一般版」時兩個一起亮
+        private bool IsOptionOn(ArgOption o)
+        {
+            if (!_argsKey.Contains(o.Key)) return false;
+            foreach (ArgOption p in _cfg.Options)
+                if (p != o && p.Key.Length > o.Key.Length && p.Key.Contains(o.Key) && _argsKey.Contains(p.Key))
+                    return false;
+            return true;
+        }
+
         private void OnYtToggled(object sender, EventArgs e)
         {
             if (_chkGuard || !_detected) return;
@@ -1696,8 +1706,11 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             ArgOption o = _gridOptions.Items[i].Tag as ArgOption;
             if (o == null) return;
             string a = _boxArgs.Inner.Text;
-            bool wasOn = ArgsText.Has(a, o.Args);
-            foreach (ArgOption p in _cfg.Options)
+            bool wasOn = IsOptionOn(o);
+            // 先移長參數（如「加速版」）再移短參數，避免移除短參數後殘留長參數的尾部
+            List<ArgOption> ps = new List<ArgOption>(_cfg.Options);
+            ps.Sort(delegate(ArgOption x, ArgOption y) { return y.Key.Length.CompareTo(x.Key.Length); });
+            foreach (ArgOption p in ps)
                 if (p != o && ArgsText.Has(a, p.Args)) a = ArgsText.Remove(a, p.Args);
             if (wasOn) a = ArgsText.Remove(a, o.Args);
             else
@@ -1740,7 +1753,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             ArgOption neu = OptionDialog.Edit(this, Font, old);
             if (neu == null) return;
             string a = _boxArgs.Inner.Text;
-            if (ArgsText.Has(a, old.Args)) a = ArgsText.MoveFormatFirst(ArgsText.Add(ArgsText.Remove(a, old.Args), neu.Args));
+            if (IsOptionOn(old)) a = ArgsText.MoveFormatFirst(ArgsText.Add(ArgsText.Remove(a, old.Args), neu.Args));
             old.Name = neu.Name; old.Args = neu.Args;
             _cfg.Save();
             _boxArgs.Inner.Text = a;
