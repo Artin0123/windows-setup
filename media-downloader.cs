@@ -11,7 +11,7 @@
 //     影像 + 音訊可疊加（以 + 連接寫入 -f，-f 永遠排在參數最前面）；同類型只是切換
 //   · 分頁「參數管理」：參數項目表格（一次只能選一個），可新增 / 編輯 / 刪除
 //   · 分頁「設定」：開啟設定檔位置（檔案總管選取 media-downloader.ini）、
-//     yt-dlp / ffmpeg / aria2c 偵測狀態；yt-dlp / aria2c 左側可勾選（下載引擎）：
+//     yt-dlp / ffmpeg / aria2c 偵測狀態；未安裝的畫 ✘（唯讀）；yt-dlp / aria2c 左側可勾選（下載引擎，互斥）：
 //     勾 yt-dlp = 用 yt-dlp；只勾 aria2c = 直接跑 aria2c 下載 urls 檔（參數列/參數管理的內容都會套用）；
 //     另有批量輸入編輯器設定
 //   · 依賴「按需禁用」：兩個引擎都沒有（或都沒勾）才禁用下載；格式列表需要 yt-dlp；
@@ -1475,6 +1475,15 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _cfg.YtdlpEnabled = on;
             string flag = on ? "1" : "0";
             ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("ytdlpEnabled", flag); });
+
+            if (on && _lblDetAr.Checked)   // 互斥：勾 yt-dlp 就取消 aria2c
+            {
+                _chkGuard = true;
+                _lblDetAr.Checked = false;
+                _chkGuard = false;
+                _cfg.Aria2Enabled = false;
+                ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("aria2Enabled", "0"); });
+            }
             UpdateEnabled();
         }
 
@@ -1485,6 +1494,15 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _cfg.Aria2Enabled = on;
             string flag = on ? "1" : "0";
             ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("aria2Enabled", flag); });
+
+            if (on && _lblDetYt.Checked)   // 互斥：勾 aria2c 就取消 yt-dlp
+            {
+                _chkGuard = true;
+                _lblDetYt.Checked = false;
+                _chkGuard = false;
+                _cfg.YtdlpEnabled = false;
+                ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("ytdlpEnabled", "0"); });
+            }
             UpdateEnabled();
         }
 
@@ -2164,10 +2182,11 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             int nameW = NameWidth > 0 ? NameWidth : TextRenderer.MeasureText(Title, Font).Width + Theme.S(28);
             Rectangle markRect = new Rectangle(0, 0, markW, Height);
 
-            if (Checkable && (State == 1 || State == 2))
-                DrawCheckBox(g, State == 1);
+            if (Checkable && State == 1)
+                DrawCheckBox(g);
             else
             {
+                // 未安裝的勾選項也畫 ✘（與 ffmpeg 唯讀列同樣式，不可點）
                 string mark = State == 1 ? "\u2714" : State == 2 ? "\u2718" : "\u2026";
                 Color mc = State == 1 ? Theme.Good : State == 2 ? Theme.Bad : Theme.Dim;
                 TextRenderer.DrawText(g, mark, Font, markRect, mc, fl);
@@ -2178,15 +2197,14 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                 State == 2 ? Theme.Bad : Theme.Dim, fl);
         }
 
-        private void DrawCheckBox(Graphics g, bool enabled)
+        private void DrawCheckBox(Graphics g)
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             int side = Math.Max(Theme.S(16), Font.Height - 4);
             RectangleF box = new RectangleF(0.5f, (Height - side) / 2f, side - 1f, side - 1f);
-            Color border = !enabled ? Color.FromArgb(70, 72, 80)
-                : (_checked || _over) ? Theme.Accent : Theme.Border;
+            Color border = (_checked || _over) ? Theme.Accent : Theme.Border;
             using (GraphicsPath p = Theme.Round(box, 5))
-            using (SolidBrush br = new SolidBrush(_checked ? (enabled ? Theme.Accent : Color.FromArgb(70, 72, 80)) : Theme.Input))
+            using (SolidBrush br = new SolidBrush(_checked ? Theme.Accent : Theme.Input))
             using (Pen pen = new Pen(border, 1.4f))
             {
                 g.FillPath(br, p);
