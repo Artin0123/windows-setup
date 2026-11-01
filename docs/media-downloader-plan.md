@@ -23,6 +23,9 @@
 - [x] 調整 8：移除 aria2c 另一個參數框（設定分頁那個）與整個 aria2Args 機制：
   勾 yt-dlp = 純 yt-dlp；只勾 aria2c = 直接下載 urls 檔（吃參數列/參數管理）；
   aria2c 參數改由參數列自行填寫；ini 不再有 aria2Args；aria2c 列與其他列同寬
+- [x] 調整 9：模板 parameter 選項調整：移除「1080p 視訊 + 最佳音訊」；新增
+  「最佳視訊和音訊」（bestvideo+bestaudio/best，含 fallback）與
+  「最佳視訊和音訊 (aria2c 加速)」（同上再加 --downloader aria2c …）
 
 ## 完成備註
 
