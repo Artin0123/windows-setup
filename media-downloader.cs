@@ -149,7 +149,8 @@ namespace MediaDownloader
         public string Editor = "notepad";
         public const string DefaultAria2Args = "--downloader aria2c --downloader-args \"aria2c:-x 16 -s 16 -k 1M\"";
         public string Aria2Args = DefaultAria2Args;
-        public bool Aria2Enabled = true;
+        public bool YtdlpEnabled = true;
+        public bool Aria2Enabled = false;
         public List<ArgOption> Options = new List<ArgOption>();
 
         private const string Template =
@@ -171,9 +172,14 @@ outputDir =
 ; 啟動時參數列的初始內容
 defaultArgs =
 
-; aria2c 下載加速（偵測到 aria2c 時預設啟用，可在「設定」分頁開關）
-aria2Enabled = 1
+; aria2c 參數：勾 yt-dlp 時注入參數列加速；只勾 aria2c 時直接加在 aria2c 指令後
+; （預設值是 yt-dlp 用的寫法；只用 aria2c 直接下載時改成 -x 16 -s 16 -k 1M 這類原生參數）
+aria2Enabled = 0
+ytdlpEnabled = 1
 aria2Args = --downloader aria2c --downloader-args ""aria2c:-x 16 -s 16 -k 1M""
+
+; 批量輸入用的編輯工具（開啟 media-downloader-urls.txt；例如 notepad、code）
+editor = notepad
 
 ; 參數管理  option = 顯示名稱 | 參數字串
 option = 僅最佳音訊 | -f bestaudio
@@ -249,6 +255,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                     case "defaultargs": c.DefaultArgs = val; break;
                     case "editor": if (val.Length > 0) c.Editor = val; break;
                     case "aria2enabled": c.Aria2Enabled = val != "0"; break;
+                    case "ytdlpenabled": c.YtdlpEnabled = val != "0"; break;
                     case "aria2args": if (val.Length > 0) { c.Aria2Args = val; hasAria2Key = true; } break;
                 }
             }
@@ -1067,75 +1074,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         }
     }
 
-    // ------------------------------------------------------------------ 圓角深色勾選框
-    internal sealed class RoundCheck : Control
-    {
-        public event EventHandler CheckedChanged;
-        private bool _checked, _over;
-
-        public bool Checked
-        {
-            get { return _checked; }
-            set
-            {
-                if (_checked == value) return;
-                _checked = value;
-                Invalidate();
-                Update();   // 先把新狀態畫出來，再做後續（寫入參數等）工作
-                if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
-            }
-        }
-
-        public RoundCheck()
-        {
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
-                | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            SetStyle(ControlStyles.StandardDoubleClick, false);   // 快速連點也算兩次點擊
-            Cursor = Cursors.Hand;
-        }
-
-        protected override void OnMouseUp(MouseEventArgs e)
-        {
-            base.OnMouseUp(e);
-            if (Enabled && e.Button == MouseButtons.Left && ClientRectangle.Contains(e.Location)) Checked = !Checked;
-        }
-        protected override void OnMouseEnter(EventArgs e) { _over = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { _over = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
-        protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            g.Clear(Theme.BackBehind(this));
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            int side = Math.Max(Theme.S(18), Font.Height + 2);
-            RectangleF box = new RectangleF(0.5f, (Height - side) / 2f, side - 1f, side - 1f);
-            Color border = !Enabled ? Color.FromArgb(70, 72, 80) : (_checked || _over) ? Theme.Accent : Theme.Border;
-            using (GraphicsPath p = Theme.Round(box, 6))
-            using (SolidBrush br = new SolidBrush(_checked ? (Enabled ? Theme.Accent : Color.FromArgb(70, 72, 80)) : Theme.Input))
-            using (Pen pen = new Pen(border, 1.4f))
-            {
-                g.FillPath(br, p);
-                g.DrawPath(pen, p);
-            }
-            if (_checked)
-                using (Pen tick = new Pen(Color.White, Math.Max(2f, side / 8f)))
-                {
-                    tick.StartCap = LineCap.Round; tick.EndCap = LineCap.Round; tick.LineJoin = LineJoin.Round;
-                    float x = box.X, y = box.Y, w = box.Width, h = box.Height;
-                    g.DrawLines(tick, new PointF[] {
-                        new PointF(x + w * 0.24f, y + h * 0.52f),
-                        new PointF(x + w * 0.43f, y + h * 0.71f),
-                        new PointF(x + w * 0.77f, y + h * 0.31f) });
-                }
-            Rectangle tr = new Rectangle(side + Theme.S(12), 0, Math.Max(10, Width - side - Theme.S(12)), Height);
-            TextRenderer.DrawText(g, Text, Font, tr, Enabled ? Theme.Text : Theme.Dim,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine
-                | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-        }
-    }
-
     // ------------------------------------------------------------------ 在總管中選取路徑（比 explorer /select 快）
     internal static class ShellReveal
     {
@@ -1179,11 +1117,10 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         private const string FormatHintIdle = "點擊此處列出可用格式\r\n（需先輸入網址）";
 
         private readonly Config _cfg;
-        private readonly Label _lblUrl, _lblArgs, _lblPath, _lblFmtHint;
+        private readonly Label _lblUrl, _lblArgs, _lblPath, _lblFmtHint, _lblAria2Args, _lblEditor;
         private readonly StatusRow _lblDetYt, _lblDetFf, _lblDetAr;
-        private readonly RoundBox _boxUrl, _boxArgs, _boxPath;
+        private readonly RoundBox _boxUrl, _boxArgs, _boxPath, _boxAria2Args, _boxEditor;
         private readonly RoundButton _btnBatch, _btnDownload, _btnSave, _btnOpenFolder, _btnAdd, _btnEdit, _btnDel, _btnOpenIni, _btnRedetect;
-        private readonly RoundCheck _chkAria2;
         private readonly TabStrip _tabs;
         private readonly ContentPanel _panel;
         private readonly GridList _gridFormats, _gridOptions;
@@ -1212,7 +1149,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             StartPosition = FormStartPosition.CenterScreen;
             int lh = Font.Height, rowH = lh + Theme.S(18);
             Theme.Corner = Math.Max(Theme.S(8), rowH / 3);
-            int needH = Theme.S(22) + 3 * (rowH + Theme.S(12)) + Theme.S(6) + rowH + lh * 14 + Theme.S(22);
+            int needH = Theme.S(22) + 3 * (rowH + Theme.S(12)) + Theme.S(6) + rowH + lh * 16 + Theme.S(22);
             ClientSize = new Size(Math.Max(Theme.S(820), lh * 38), needH);
             MinimumSize = new Size(Size.Width - Theme.S(60), Size.Height - Theme.S(80));
 
@@ -1245,10 +1182,16 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _lblFmtHint.TextAlign = ContentAlignment.MiddleCenter;
             _lblFmtHint.Cursor = Cursors.Hand;
 
-            _lblDetYt = new StatusRow("yt-dlp");
-            _lblDetFf = new StatusRow("ffmpeg");
-            _lblDetAr = new StatusRow("aria2c");
-            _chkAria2 = new RoundCheck();
+            _lblDetYt = new StatusRow("yt-dlp", true);
+            _lblDetFf = new StatusRow("ffmpeg", false);
+            _lblDetAr = new StatusRow("aria2c", true);
+
+            _lblAria2Args = MakePanelLabel("aria2c 參數");
+            _boxAria2Args = new RoundBox(false);
+            _boxAria2Args.Inner.Text = _cfg.Aria2Args;
+            _lblEditor = MakePanelLabel("批量輸入編輯器");
+            _boxEditor = new RoundBox(false);
+            _boxEditor.Inner.Text = string.IsNullOrEmpty(_cfg.Editor) ? "notepad" : _cfg.Editor;
 
             _gridFormats = new GridList();
             _gridFormats.IsOn = delegate(object o) { return _selFormats.Contains(o as FormatItem); };
@@ -1260,7 +1203,8 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _panel.Controls.Add(_btnAdd); _panel.Controls.Add(_btnEdit); _panel.Controls.Add(_btnDel);
             _panel.Controls.Add(_btnOpenIni); _panel.Controls.Add(_btnRedetect);
             _panel.Controls.Add(_lblDetYt); _panel.Controls.Add(_lblDetFf); _panel.Controls.Add(_lblDetAr);
-            _panel.Controls.Add(_chkAria2);
+            _panel.Controls.Add(_lblAria2Args); _panel.Controls.Add(_boxAria2Args);
+            _panel.Controls.Add(_lblEditor); _panel.Controls.Add(_boxEditor);
             _panel.Controls.Add(_lblFmtHint); _panel.Controls.Add(_gridFormats); _panel.Controls.Add(_gridOptions);
 
             Controls.Add(_boxUrl); Controls.Add(_btnBatch); Controls.Add(_btnDownload);
@@ -1297,7 +1241,10 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _btnOpenFolder.Click += OnOpenFolder;
             _btnOpenIni.Click += OnOpenIni;
             _btnRedetect.Click += delegate { StartDetect(); };
-            _chkAria2.CheckedChanged += OnAria2Toggled;
+            _lblDetYt.CheckedChanged += OnYtToggled;
+            _lblDetAr.CheckedChanged += OnAriaToggled;
+            _boxAria2Args.Inner.Leave += delegate { SaveAria2Args(); };
+            _boxEditor.Inner.Leave += delegate { SaveEditor(); };
             _lblFmtHint.Click += delegate { StartListFormats(); };
             _gridFormats.ItemClicked += OnFormatClicked;
             _gridOptions.ItemClicked += OnOptionClicked;
@@ -1322,6 +1269,16 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             RoundButton b = new RoundButton();
             b.Text = text; b.BackColor = back;
             return b;
+        }
+
+        // 設定分頁用的標籤（加到 _panel 而不是主表單）
+        private Label MakePanelLabel(string text)
+        {
+            Label l = new Label();
+            l.Text = text; l.AutoSize = false; l.BackColor = Color.Transparent;
+            l.ForeColor = Theme.Text; l.TextAlign = ContentAlignment.MiddleLeft;
+            _panel.Controls.Add(l);
+            return l;
         }
 
         // -------------------------------------------------------------- 版面
@@ -1410,10 +1367,14 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _btnRedetect.SetBounds(in1 + iw + bg, in1, rw, rowH);
             int y = in1 + rowH + Theme.S(22);
             int lineH = lh + Theme.S(12);
-            _lblDetYt.SetBounds(in1, y, pw - in1 * 2, lineH); y += lineH;
-            _lblDetFf.SetBounds(in1, y, pw - in1 * 2, lineH); y += lineH;
-            _lblDetAr.SetBounds(in1, y, pw - in1 * 2, lineH); y += lineH + Theme.S(20);
-            _chkAria2.SetBounds(in1, y, pw - in1 * 2, rowH);
+            int rowW = pw - in1 * 2;
+            _lblDetYt.SetBounds(in1, y, rowW, lineH); y += lineH;
+            _lblDetFf.SetBounds(in1, y, rowW, lineH); y += lineH;
+            _lblDetAr.SetBounds(in1, y, rowW, lineH); y += lineH + Theme.S(16);
+            _lblAria2Args.SetBounds(in1, y, rowW, lh); y += lh + Theme.S(4);
+            _boxAria2Args.SetBounds(in1, y, rowW, rowH); y += rowH + Theme.S(12);
+            _lblEditor.SetBounds(in1, y, rowW, lh); y += lh + Theme.S(4);
+            _boxEditor.SetBounds(in1, y, rowW, rowH);
         }
 
         private void ShowTab(int i)
@@ -1422,7 +1383,8 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _btnAdd.Visible = _btnEdit.Visible = _btnDel.Visible = par;
             _gridOptions.Visible = par;
             _btnOpenIni.Visible = _btnRedetect.Visible = set;
-            _lblDetYt.Visible = _lblDetFf.Visible = _lblDetAr.Visible = _chkAria2.Visible = set;
+            _lblDetYt.Visible = _lblDetFf.Visible = _lblDetAr.Visible = set;
+            _lblAria2Args.Visible = _boxAria2Args.Visible = _lblEditor.Visible = _boxEditor.Visible = set;
             RefreshFormatList();
             LayoutPanel();
             _panel.Invalidate();
@@ -1448,11 +1410,12 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         {
             _yt = ty; _ff = tf; _ar = ta; _detected = true;
 
-            // 偵測到 aria2c：依設定預設啟用（只套用一次）
-            if (_ar.Found && !_aria2Applied)
+            // 依 ini 的勾選狀態套用：yt-dlp + aria2c 都勾 = 把 aria2c 參數注入參數列（只套用一次）
+            if (_ar.Found && !_aria2Applied && _cfg.YtdlpEnabled && _cfg.Aria2Enabled && _cfg.Aria2Args.Length > 0)
             {
                 _aria2Applied = true;
-                if (_cfg.Aria2Enabled) _boxArgs.Inner.Text = ArgsText.Add(_boxArgs.Inner.Text, _cfg.Aria2Args);
+                if (!ArgsText.Has(_boxArgs.Inner.Text, _cfg.Aria2Args))
+                    _boxArgs.Inner.Text = ArgsText.Add(_boxArgs.Inner.Text, _cfg.Aria2Args);
             }
             UpdateDetectLabels();
             UpdateEnabled();
@@ -1476,15 +1439,30 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                 SetDet(_lblDetAr, _ar);
             }
             _chkGuard = true;
-            _chkAria2.Enabled = _ar.Found;
-            _chkAria2.Text = _ar.Found ? "aria2c 多線程加速（若無法下載，嘗試關閉此功能）" : "aria2c 多線程加速（未偵測到 aria2c）";
-            _chkAria2.Checked = _ar.Found && ArgsText.Has(_boxArgs.Inner.Text, _cfg.Aria2Args);
+            if (_detected)
+            {
+                _lblDetYt.Checked = _yt.Found && _cfg.YtdlpEnabled;
+                _lblDetAr.Checked = _ar.Found && _cfg.Aria2Enabled;
+            }
+            else
+            {
+                _lblDetYt.Checked = false;
+                _lblDetAr.Checked = false;
+            }
+            _lblDetAr.Title = (_lblDetYt.Checked && _lblDetAr.Checked) ? "aria2c（已加速 yt-dlp）" : "aria2c";
             _chkGuard = false;
+        }
+
+        // yt-dlp 模式 = 勾了 yt-dlp（且 ffmpeg 等其他依賴照舊）
+        private bool YtEngineOn
+        {
+            get { return _detected && _yt.Found && _lblDetYt.Checked; }
         }
 
         private void UpdateEnabled()
         {
-            _btnDownload.Enabled = _yt.Found && _detected;
+            bool arOn = _detected && _ar.Found && _lblDetAr.Checked;
+            _btnDownload.Enabled = YtEngineOn || arOn;
             RefreshFormatList();
         }
 
@@ -1494,24 +1472,83 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             if (!_updating) SyncFormatsFromArgs();
             _gridOptions.Invalidate();
             _gridFormats.Invalidate();
-            if (_ar.Found && !_chkGuard)
+
+            // yt-dlp 模式下：手動從參數列移除/加回 aria2c 參數 → 同步 aria2c 勾選狀態
+            if (YtEngineOn && _ar.Found && _cfg.Aria2Args.Length > 0 && !_chkGuard)
+            {
+                bool has = ArgsText.Has(_boxArgs.Inner.Text, _cfg.Aria2Args);
+                if (has != _lblDetAr.Checked)
+                {
+                    _chkGuard = true;
+                    _lblDetAr.Checked = has;
+                    _cfg.Aria2Enabled = has;
+                    _lblDetAr.Title = (has && YtEngineOn) ? "aria2c（已加速 yt-dlp）" : "aria2c";
+                    _chkGuard = false;
+                    string flag = has ? "1" : "0";
+                    ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("aria2Enabled", flag); });
+                }
+            }
+        }
+
+        private void OnYtToggled(object sender, EventArgs e)
+        {
+            if (_chkGuard || !_detected) return;
+            bool on = _lblDetYt.Checked;
+            _cfg.YtdlpEnabled = on;
+            string flag = on ? "1" : "0";
+            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("ytdlpEnabled", flag); });
+
+            _chkGuard = true;
+            // aria2c 也勾著時：yt-dlp 模式 = aria2c 參數注入參數列；純 aria2c 模式 = 從參數列移除
+            if (_ar.Found && _lblDetAr.Checked && _cfg.Aria2Args.Length > 0)
+                _boxArgs.Inner.Text = on ? ArgsText.Add(_boxArgs.Inner.Text, _cfg.Aria2Args)
+                                         : ArgsText.Remove(_boxArgs.Inner.Text, _cfg.Aria2Args);
+            _lblDetAr.Title = (on && _lblDetAr.Checked) ? "aria2c（已加速 yt-dlp）" : "aria2c";
+            _chkGuard = false;
+            UpdateEnabled();
+        }
+
+        private void OnAriaToggled(object sender, EventArgs e)
+        {
+            if (_chkGuard || !_detected) return;
+            bool on = _lblDetAr.Checked;
+            _cfg.Aria2Enabled = on;
+            string flag = on ? "1" : "0";
+            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("aria2Enabled", flag); });
+
+            _chkGuard = true;
+            if (YtEngineOn && _cfg.Aria2Args.Length > 0)
+                _boxArgs.Inner.Text = on ? ArgsText.Add(_boxArgs.Inner.Text, _cfg.Aria2Args)
+                                         : ArgsText.Remove(_boxArgs.Inner.Text, _cfg.Aria2Args);
+            _lblDetAr.Title = (YtEngineOn && on) ? "aria2c（已加速 yt-dlp）" : "aria2c";
+            _chkGuard = false;
+            UpdateEnabled();
+        }
+
+        // 設定分頁：aria2c 參數存檔；若正注入在參數列裡，同步換新
+        private void SaveAria2Args()
+        {
+            string t = ArgsText.Norm(_boxAria2Args.Inner.Text);
+            if (t == _cfg.Aria2Args) return;
+            string old = _cfg.Aria2Args;
+            _cfg.Aria2Args = t;
+            _cfg.SaveScalar("aria2Args", t);
+            if (old.Length > 0 && t.Length > 0 && ArgsText.Has(_boxArgs.Inner.Text, old))
             {
                 _chkGuard = true;
-                _chkAria2.Checked = ArgsText.Has(_boxArgs.Inner.Text, _cfg.Aria2Args);
+                _boxArgs.Inner.Text = ArgsText.Add(ArgsText.Remove(_boxArgs.Inner.Text, old), t);
                 _chkGuard = false;
             }
         }
 
-        private void OnAria2Toggled(object sender, EventArgs e)
+        // 設定分頁：批量輸入編輯器存檔
+        private void SaveEditor()
         {
-            if (_chkGuard || !_ar.Found) return;
-            string a = _boxArgs.Inner.Text;
-            _chkGuard = true;
-            _boxArgs.Inner.Text = _chkAria2.Checked ? ArgsText.Add(a, _cfg.Aria2Args) : ArgsText.Remove(a, _cfg.Aria2Args);
-            _chkGuard = false;
-            _cfg.Aria2Enabled = _chkAria2.Checked;
-            string flag = _chkAria2.Checked ? "1" : "0";
-            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("aria2Enabled", flag); });
+            string t = _boxEditor.Inner.Text.Trim();
+            if (t.Length == 0) t = "notepad";
+            if (t == _cfg.Editor) return;
+            _cfg.Editor = t;
+            _cfg.SaveScalar("editor", t);
         }
 
         private void OnOpenIni(object sender, EventArgs e)
@@ -1780,8 +1817,9 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _lblFmtHint.Visible = fmtTab && !_fmtLoaded;
             if (_listing) _lblFmtHint.Text = "解析中…";
             else if (_detected && !_yt.Found) _lblFmtHint.Text = "未偵測到 yt-dlp";
+            else if (_detected && !_lblDetYt.Checked) _lblFmtHint.Text = "需要 yt-dlp";
             else _lblFmtHint.Text = FormatHintIdle;
-            _lblFmtHint.Cursor = (_listing || (_detected && !_yt.Found)) ? Cursors.Default : Cursors.Hand;
+            _lblFmtHint.Cursor = (_listing || (_detected && (!_yt.Found || !_lblDetYt.Checked))) ? Cursors.Default : Cursors.Hand;
             _gridFormats.Invalidate();
         }
 
@@ -1827,7 +1865,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
 
         private void StartListFormats()
         {
-            if (_listing || !_yt.Found) return;
+            if (_listing || !YtEngineOn) return;
             List<string> urls = GetUrls();
             if (urls.Count == 0) { MessageBox.Show(this, "請先輸入網址。", Text); return; }
             string url = urls[0];
@@ -2056,16 +2094,34 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         }
     }
 
-    // ------------------------------------------------------------------ 偵測狀態列（打勾 / 叉靠左，名稱與內容各自對齊）
+    // ------------------------------------------------------------------ 偵測狀態列
+    // Checkable = true 時左側是可勾選的圓角勾選框（工具偵測到才可點）；否則是唯讀的打勾/叉。
     internal sealed class StatusRow : Control
     {
         public string Title;
         public int State;          // 0 偵測中, 1 有, 2 無
         public string Detail = "";
+        public bool Checkable;
+        private bool _checked, _over;
 
-        public StatusRow(string title)
+        public event EventHandler CheckedChanged;
+
+        public bool Checked
+        {
+            get { return _checked; }
+            set
+            {
+                if (_checked == value) return;
+                _checked = value;
+                Invalidate();
+                if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
+            }
+        }
+
+        public StatusRow(string title, bool checkable)
         {
             Title = title;
+            Checkable = checkable;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
                 | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         }
@@ -2076,6 +2132,33 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             Invalidate();
         }
 
+        private bool Interactive { get { return Checkable && State == 1; } }
+
+        private bool InMark(Point p)
+        {
+            return Interactive && p.X <= Theme.S(34);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool over = InMark(e.Location);
+            if (over != _over) { _over = over; Invalidate(); }
+            Cursor.Current = over ? Cursors.Hand : Cursors.Default;
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (_over) { _over = false; Invalidate(); }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left && InMark(e.Location)) Checked = !Checked;
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
@@ -2083,13 +2166,47 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             TextFormatFlags fl = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine
                 | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
             int markW = Theme.S(30);
-            int nameW = TextRenderer.MeasureText("yt-dlp", Font).Width + Theme.S(28);
-            string mark = State == 1 ? "\u2714" : State == 2 ? "\u2718" : "\u2026";
-            Color mc = State == 1 ? Theme.Good : State == 2 ? Theme.Bad : Theme.Dim;
-            TextRenderer.DrawText(g, mark, Font, new Rectangle(0, 0, markW, Height), mc, fl);
+            int nameW = TextRenderer.MeasureText(Title, Font).Width + Theme.S(28);
+            Rectangle markRect = new Rectangle(0, 0, markW, Height);
+
+            if (Checkable && (State == 1 || State == 2))
+                DrawCheckBox(g, State == 1);
+            else
+            {
+                string mark = State == 1 ? "\u2714" : State == 2 ? "\u2718" : "\u2026";
+                Color mc = State == 1 ? Theme.Good : State == 2 ? Theme.Bad : Theme.Dim;
+                TextRenderer.DrawText(g, mark, Font, markRect, mc, fl);
+            }
+
             TextRenderer.DrawText(g, Title, Font, new Rectangle(markW, 0, nameW, Height), Theme.Text, fl);
             TextRenderer.DrawText(g, Detail, Font, new Rectangle(markW + nameW, 0, Math.Max(10, Width - markW - nameW), Height),
                 State == 2 ? Theme.Bad : Theme.Dim, fl);
+        }
+
+        private void DrawCheckBox(Graphics g, bool enabled)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            int side = Math.Max(Theme.S(16), Font.Height - 4);
+            RectangleF box = new RectangleF(0.5f, (Height - side) / 2f, side - 1f, side - 1f);
+            Color border = !enabled ? Color.FromArgb(70, 72, 80)
+                : (_checked || _over) ? Theme.Accent : Theme.Border;
+            using (GraphicsPath p = Theme.Round(box, 5))
+            using (SolidBrush br = new SolidBrush(_checked ? (enabled ? Theme.Accent : Color.FromArgb(70, 72, 80)) : Theme.Input))
+            using (Pen pen = new Pen(border, 1.4f))
+            {
+                g.FillPath(br, p);
+                g.DrawPath(pen, p);
+            }
+            if (_checked)
+                using (Pen tick = new Pen(Color.White, Math.Max(2f, side / 8f)))
+                {
+                    tick.StartCap = LineCap.Round; tick.EndCap = LineCap.Round; tick.LineJoin = LineJoin.Round;
+                    float x = box.X, y = box.Y, w = box.Width, h = box.Height;
+                    g.DrawLines(tick, new PointF[] {
+                        new PointF(x + w * 0.24f, y + h * 0.52f),
+                        new PointF(x + w * 0.43f, y + h * 0.71f),
+                        new PointF(x + w * 0.77f, y + h * 0.31f) });
+                }
         }
     }
 
