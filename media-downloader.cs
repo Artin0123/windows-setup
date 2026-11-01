@@ -175,7 +175,6 @@ editor = notepad
 option = 檔案下載 (限單獨 aria2c) | -o ""%(title)s.%(ext)s"" -x4 -s4 --max-tries=2 --connect-timeout=5 --timeout=5
 option = 僅最佳音訊 | -f bestaudio
 option = 最佳視訊和音訊 | bestvideo+bestaudio/best
-option = 最佳視訊和音訊 (aria2c 加速) | bestvideo+bestaudio/best --downloader aria2c --downloader-args ""aria2c:-x 16 -s 16 -k 1M""
 option = 1080p mp4 視訊 + 最佳音訊 | bestvideo[format_note*=1080p][ext=mp4]+bestaudio
 option = 下載縮圖 | --write-thumbnail --skip-download
 option = 下載所有字幕 | --write-all-subs --skip-download

@@ -26,6 +26,7 @@
 - [x] 調整 9：模板 parameter 選項調整：移除「1080p 視訊 + 最佳音訊」；新增
   「最佳視訊和音訊」（bestvideo+bestaudio/best，含 fallback）與
   「最佳視訊和音訊 (aria2c 加速)」（同上再加 --downloader aria2c …）
+- [x] 調整 10：移除「最佳視訊和音訊 (aria2c 加速)」選項（加速參數改由參數列自行填寫）
 
 ## 完成備註
 
