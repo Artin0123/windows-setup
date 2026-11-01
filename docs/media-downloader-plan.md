@@ -20,11 +20,15 @@
 - [x] 調整 7：批量輸入編輯器移回中間（按鈕列與工具列之間獨立一行）；工具列彼此間距回 S(12)，
   只有按鈕列 ↔ 編輯器 ↔ 工具列之間用 S(20)；aria2c 模式改回只吃參數列（aria2Args 僅 yt-dlp
   模式用）；aria2c 參數框永遠可編輯（無唯讀條件）
+- [x] 調整 8：移除 aria2c 另一個參數框（設定分頁那個）與整個 aria2Args 機制：
+  勾 yt-dlp = 純 yt-dlp；只勾 aria2c = 直接下載 urls 檔（吃參數列/參數管理）；
+  aria2c 參數改由參數列自行填寫；ini 不再有 aria2Args；aria2c 列與其他列同寬
 
 ## 完成備註
 
 - 冒煙測試：`csc-build.cmd` 編譯 OK（含 --make-ico 圖示產生）；啟動 exe 自動產生 media-downloader.ini，模板含新 key（aria2Enabled=0 / ytdlpEnabled=1 / editor）與「檔案下載」option。
 - 預設 `aria2Args` 是 yt-dlp 用的寫法（--downloader aria2c …）；只用 aria2c 直接下載時需自行改成原生參數（模板註解已說明）。
+  → 後改（調整 8）：整個 aria2Args 機制移除，aria2c 參數改由參數列自行填寫。
 - 舊 `yt-dlp-downloader.ini` 不自動遷移（計劃第 8 節）。
 
 ## 1. 檔案與更名
@@ -76,8 +80,8 @@
 | yt-dlp | aria2c | 「下載」實際行為 |
 |---|---|---|
 | ☑ | ☐ | 純 yt-dlp（參數列原樣） |
-| ☑ | ☑ | yt-dlp + 把 `aria2Args` 注入參數列（沿用現有 `OnAria2Toggled` 的加入/移除機制，參數列所見 = 實際呼叫） |
-| ☐ | ☑ | aria2c 直接下載 urls 檔：`aria2c <參數列> -d <位置> -i <urls檔> & echo. & pause`（參數列含參數管理套用的內容；aria2Args 不參與，只在 yt-dlp 模式使用） |
+| ☑ | ☑ | 同 ☑yt ☐aria（aria2c 勾選不影響 yt-dlp 模式的呼叫方式） |
+| ☐ | ☑ | aria2c 直接下載 urls 檔：`aria2c <參數列> -d <位置> -i <urls檔> & echo. & pause`（參數列含參數管理套用的內容） |
 | ☐ | ☐ | 「下載」禁用 |
 
 - 預設值（偵測完成後、ini 無紀錄時）：兩者皆裝 → 只勾 yt-dlp；只有 aria2c → 勾 aria2c；
@@ -87,6 +91,7 @@
 ### 4.2 其他設定分頁內容
 
 - 「aria2c 參數」文字框（可編輯、存 ini `aria2Args`）：yt-dlp 模式 = 注入參數列的內容；
+  → 後改（調整 8）：此框與 aria2Args 機制整個移除。
   aria2c 模式 = 附加在 aria2c 指令後。
 - 「批量輸入編輯器」文字框（預設 `notepad`、存 ini `editor`）。
 - 「重新偵測」「開啟設定檔位置」按鈕保留。
@@ -99,6 +104,7 @@
   -x4 -s4 …）與「aria2c 參數」都加在 aria2c 指令後；內容不合用時的報錯由 aria2c 自己負責。
   → 後改：aria2c 模式只吃參數列（含參數管理套用的內容）；aria2Args 只在 yt-dlp 模式使用；
   aria2c 參數框永遠可編輯（它就是 aria2Args 設定，無唯讀條件）。
+  → 最終（調整 8）：aria2Args 機制整個移除，aria2c 參數改由參數列自行填寫。
 - 批量輸入：照常作用（urls 檔正是 aria2c 模式的輸入）。
 
 ## 6. ini（media-downloader.ini，第一次執行自動產生）
@@ -110,7 +116,7 @@ uiFont / uiFontSize          介面字型（沿用）
 ytdlp / ffmpeg / aria2c      工具路徑（沿用）
 outputDir                    下載資料夾（沿用）
 defaultArgs                  啟動參數（沿用）
-aria2Args                    aria2c 參數（可自訂；yt-dlp 模式=注入參數列、aria2c 模式=指令參數）
+aria2Enabled                 aria2c 勾選狀態（0/1）
 editor                       批量輸入編輯器（預設 notepad）
 ytdlpEnabled = 1/0           yt-dlp 勾選狀態（新）
 aria2Enabled = 1/0           aria2c 勾選狀態（沿用 key，語意改為「勾選 aria2c」）
@@ -128,14 +134,14 @@ option = 顯示名稱 | 參數字串  參數管理（沿用）
    yt-dlp、aria2c 列 `Checkable = true`，ffmpeg 列維持唯讀。
 2. **勾選連動**：
    - yt-dlp 勾選狀態只影響「下載」走哪條路與 aria2c 勾選框文字（「已加速 yt-dlp」）。
-   - aria2c 勾選：yt-dlp 也勾時沿用 `OnAria2Toggled` 把 `aria2Args` 加入/移出參數列；
+   - aria2c 勾選：只控制「是否用 aria2c 直接下載 urls 檔」；不再注入參數列（調整 8 已移除）；
      參數列手改時同步更新勾選狀態（沿用 `_chkGuard` 機制）。
    - aria2c 勾選框文字隨 yt-dlp 勾選狀態即時更新。
 3. **編輯器流程**（自 file-dl.cs 移植改寫）：
    `EnsureUrlsFile()`、`ParseUrls()`、`DropUrlsIfEmpty()`、`OpenEditor()`（含 `proc.Exited`）、
    `OnActivated` 清理；檔名改 `media-downloader-urls.txt`；加入「網址框唯讀摘要」顯示。
 4. **OnDownload 分流**：yt-dlp 勾 → 現有流程（網址來源含 urls 檔）；僅 aria2c 務 →
-   file-dl 式 `cmd /c chcp 65001 >nul & aria2c <aria2Args> -d <dir> -i <urls檔> & echo. & pause`，
+   file-dl 式 `cmd /c chcp 65001 >nul & aria2c <參數列> -d <dir> -i <urls檔> & echo. & pause`，
    下載位置需存在（不自動建立，與 file-dl 同）。
 5. **PromptDialog** 保留（「儲存參數」命名仍在用），僅移除批量用途。
 6. **圖示**：AppIcon 改繪 file-dl 款（白箭頭+托盤、紅底）。
