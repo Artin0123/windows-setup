@@ -35,7 +35,8 @@
 - [x] 調整 12：參數管理選中判定改「最長（最具體）者優先」：加速版包含一般版參數時只亮加速版；
   點其他選項時先移長參數再移短參數，避免殘留；避免點一般版被誤判成「已選→關閉」
 - [x] 調整 13：兩個引擎勾選鍵（ytdlpEnabled/aria2Enabled）簡化成單一 useAria2（0 = yt-dlp，
-  1 = aria2c；舊鍵唯讀推導一次）；順帶清掃：無死代碼（私有方法全有引用；
+  1 = aria2c；不做舊鍵相容，舊 ini 的 ytdlpEnabled/aria2Enabled 直接被忽略，沒有 useAria2
+  就用預設 yt-dlp）；順帶清掃：無死代碼（私有方法全有引用；
   DefaultArgs/_fmtDirty/_updating/_chkGuard 均在用）
 
 ## 完成備註

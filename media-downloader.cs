@@ -197,8 +197,6 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             catch { raw = Template; }
             if (raw.Length > 0 && raw[0] == '\uFEFF') raw = raw.Substring(1);
 
-            bool hasUseAria2 = false, legacyAria2 = false;
-            bool? legacyYtdlp = null;
             foreach (string line0 in raw.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
             {
                 string line = line0.Trim();
@@ -242,13 +240,9 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                     case "outputdir": c.OutputDir = val; break;
                     case "defaultargs": c.DefaultArgs = val; break;
                     case "editor": if (val.Length > 0) c.Editor = val; break;
-                    case "usearia2": c.UseAria2 = val == "1"; hasUseAria2 = true; break;
-                    // 舊鍵（已廢棄，不再寫出）：無 useAria2 時推導一次
-                    case "aria2enabled": legacyAria2 = val == "1"; break;
-                    case "ytdlpenabled": legacyYtdlp = val != "0"; break;
+                    case "usearia2": c.UseAria2 = val == "1"; break;
                 }
             }
-            if (!hasUseAria2 && legacyAria2 && legacyYtdlp != true) c.UseAria2 = true;
             return c;
         }
 
