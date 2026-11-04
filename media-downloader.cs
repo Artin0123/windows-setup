@@ -26,8 +26,8 @@
 //
 // ini（與 exe 同目錄，第一次執行自動產生）：
 //   uiFont / uiFontSize / ytdlp / ffmpeg / aria2c / outputDir / defaultArgs
-//   editor / useAria2
-//   option = 顯示名稱 | 參數字串      （可有多行；舊版 "| 0/1 | 0/1" 尾巴與 profile 行仍可讀入）
+//   editor / engine（ytdlp 或 aria2c，目前使用的下載引擎）
+//   option = 顯示名稱 | 參數字串      （可有多行；可忽略結尾的 "| 0/1 | 0/1" 欄位；profile 行同樣可讀）
 
 using System;
 using System.Collections.Generic;
@@ -164,7 +164,7 @@ namespace MediaDownloader
         public string OutputDir = "";
         public string DefaultArgs = "";
         public string Editor = "notepad";
-        public bool UseAria2 = false;   // 下載引擎：false = yt-dlp，true = aria2c（互斥，二選一）
+        public bool UseAria2 = false;   // 目前引擎：false = ytdlp，true = aria2c（ini 的 engine 鍵，二選一）
         public List<ArgOption> Options = new List<ArgOption>();
 
         private const string Template =
@@ -179,14 +179,14 @@ outputDir =
 
 defaultArgs =
 
-useAria2 = 0
+engine = ytdlp
 
 editor = notepad
 
-option = 檔案下載 (限單獨 aria2c) | -o ""%(title)s.%(ext)s"" -x4 -s4 --max-tries=2 --connect-timeout=5 --timeout=5
+option = 檔案下載 (aria2c) | -o ""%(title)s.%(ext)s"" -x4 -k2m --max-tries=2 --connect-timeout=5 --timeout=5
 option = 僅最佳音訊 | -f bestaudio
 option = 最佳視訊和音訊 | bestvideo+bestaudio/best
-option = 最佳視訊和音訊 (aria2c 加速) | bestvideo+bestaudio/best --downloader aria2c --downloader-args ""aria2c:-x 16 -s 16 -k 1M""
+option = 最佳視訊和音訊 (+ aria2c) | bestvideo+bestaudio/best --downloader aria2c --downloader-args ""aria2c:-x4 -k2m""
 option = 1080p mp4 視訊 + 最佳音訊 | bestvideo[format_note*=1080p][ext=mp4]+bestaudio
 option = 下載縮圖 | --write-thumbnail --skip-download
 option = 下載所有字幕 | --write-all-subs --skip-download
@@ -225,7 +225,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                     if (p.Length < 2) continue;
                     string name = p[0].Trim();
                     int end = p.Length;
-                    // 舊格式：名稱 | 參數 | 0/1 | 0/1
+                    // 結尾的兩個 0/1 欄位（名稱 | 參數 | 0/1 | 0/1）不屬於參數，截掉
                     if (key == "option" && end >= 4 && (p[end - 1].Trim() == "0" || p[end - 1].Trim() == "1")
                         && (p[end - 2].Trim() == "0" || p[end - 2].Trim() == "1")) end -= 2;
                     string args = string.Join("|", p, 1, end - 1).Trim();
@@ -253,7 +253,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
                     case "outputdir": c.OutputDir = val; break;
                     case "defaultargs": c.DefaultArgs = val; break;
                     case "editor": if (val.Length > 0) c.Editor = val; break;
-                    case "usearia2": c.UseAria2 = val == "1"; break;
+                    case "engine": c.UseAria2 = val.Trim().ToLowerInvariant() == "aria2c"; break;
                 }
             }
             return c;
@@ -1414,7 +1414,15 @@ option = 下載所有字幕 | --write-all-subs --skip-download
         {
             _yt = ty; _ff = tf; _ar = ta; _detected = true;
 
-            // 依 ini 的 useAria2 還原勾選狀態
+            // 二選一且必選其一：只裝一個 → 自動選它；兩個都裝 → 依 ini（預設 yt-dlp）
+            bool before = _cfg.UseAria2;
+            if (_yt.Found && !_ar.Found) _cfg.UseAria2 = false;
+            else if (!_yt.Found && _ar.Found) _cfg.UseAria2 = true;
+            if (_cfg.UseAria2 != before)
+            {
+                bool v = _cfg.UseAria2;
+                ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("engine", v ? "aria2c" : "ytdlp"); });
+            }
             UpdateDetectLabels();
             UpdateEnabled();
             LayoutPanel();
@@ -1441,7 +1449,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _chkGuard = true;
             if (_detected)
             {
-                // 單一開關：useAria2 = false → yt-dlp，true → aria2c（工具沒裝該列就不亮）
+                // 單一變數：UseAria2 = false → yt-dlp，true → aria2c（工具沒裝該列就不亮）
                 _lblDetYt.Checked = _yt.Found && !_cfg.UseAria2;
                 _lblDetAr.Checked = _ar.Found && _cfg.UseAria2;
             }
@@ -1453,7 +1461,7 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             _chkGuard = false;
         }
 
-        // yt-dlp 模式 = 引擎選 yt-dlp（useAria2 = false）
+        // yt-dlp 模式 = 引擎選 yt-dlp（UseAria2 = false）
         private bool YtEngineOn
         {
             get { return _detected && _yt.Found && !_cfg.UseAria2; }
@@ -1483,20 +1491,26 @@ option = 下載所有字幕 | --write-all-subs --skip-download
             return true;
         }
 
-        // 互斥引擎：勾 yt-dlp = useAria2 false；勾 aria2c = useAria2 true；只存一個變數
-        private void OnYtToggled(object sender, EventArgs e)
-        {
-            if (_chkGuard || !_detected) return;
-            _cfg.UseAria2 = false;
-            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("useAria2", "0"); });
-            UpdateEnabled();
-        }
+        // 互斥引擎（必選其一）：勾 yt-dlp = UseAria2 false；勾 aria2c = UseAria2 true；只存一個變數（ini: engine）。
+        // 不允許取消（取消即回復原勾選），兩個框的顯示一律由 UpdateDetectLabels 依變數同步。
+        private void OnYtToggled(object sender, EventArgs e) { OnEngineToggled(false); }
 
-        private void OnAriaToggled(object sender, EventArgs e)
+        private void OnAriaToggled(object sender, EventArgs e) { OnEngineToggled(true); }
+
+        private void OnEngineToggled(bool aria2)
         {
             if (_chkGuard || !_detected) return;
-            _cfg.UseAria2 = true;
-            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("useAria2", "1"); });
+            StatusRow self = aria2 ? _lblDetAr : _lblDetYt;
+            if (!self.Checked || _cfg.UseAria2 == aria2)
+            {
+                UpdateDetectLabels();
+                UpdateEnabled();
+                return;
+            }
+            _cfg.UseAria2 = aria2;
+            bool v = aria2;
+            ThreadPool.QueueUserWorkItem(delegate { _cfg.SaveScalar("engine", v ? "aria2c" : "ytdlp"); });
+            UpdateDetectLabels();
             UpdateEnabled();
         }
 
