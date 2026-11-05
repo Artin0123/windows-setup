@@ -97,12 +97,11 @@ if ($missing) {
 # 2. PowerShell ($PROFILE)
 # ------------------------------------------------------------------------------
 $psInner = @'
-$GitBashBin = Get-ChildItem (Join-Path $HOME 'scoop\apps\git') -Directory |
-    Where-Object { $_.Name -match '^\d+(\.\d+)+' } |
-    Sort-Object { [version]($_.Name -replace '-.*$', '') } -Descending |
-    ForEach-Object { Join-Path $_.FullName 'bin' } |
-    Where-Object { Test-Path (Join-Path $_ 'bash.exe') } |
-    Select-Object -First 1
+# 效能原則：此檔每個新 pwsh 行程都會執行，熱路徑一律用 .NET BCL（[IO.*]）而非 cmdlet——
+# Join-Path/Test-Path 在全新行程會觸發模組自動載入掃描（實測 +150ms），[IO.*] 只要 +35ms。
+# scoop 的 current junction 直接指向最新安裝版；一次存在性檢查取代逐目錄掃描（實測 49ms → 9ms）
+$GitBashBin = [IO.Path]::Combine($HOME, 'scoop\apps\git\current\bin')
+if (-not [IO.File]::Exists([IO.Path]::Combine($GitBashBin, 'bash.exe'))) { $GitBashBin = $null }
 
 if ($GitBashBin -and (($env:Path -split ';') -notcontains $GitBashBin)) {
     $env:Path = "$GitBashBin;$env:Path"
@@ -115,17 +114,25 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 [console]::InputEncoding = [console]::OutputEncoding = [System.Text.Encoding]::UTF8
 '@ -replace "`r`n", "`n"
 
-$psProfilePath = $PROFILE
-$psDir = Split-Path $psProfilePath
-if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Force -Path $psDir | Out-Null }
+# 正典 pwsh profile（Documents\PowerShell）與 PS5 fallback（Documents\WindowsPowerShell）
+# 都寫入同一份 SHELL_ENV；venv／prompt／轉導 shim 由 venv.ps1 管理
+$docDir = [Environment]::GetFolderPath('MyDocuments')
+$psTargets = @(
+    (Join-Path $docDir 'PowerShell\Microsoft.PowerShell_profile.ps1'),
+    (Join-Path $docDir 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1')
+)
+foreach ($psProfilePath in $psTargets) {
+    $psDir = Split-Path $psProfilePath
+    if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Force -Path $psDir | Out-Null }
 
-$psLegacy = @('(?m)' + [regex]::Escape($psInner.Trim("`n")) + '[ \t]*(\n|\z)')
-$psOld = Read-Utf8Text $psProfilePath
-$psNew = Set-ManagedBlock -Text $psOld -StartMarker '# === SHELL_ENV_START ===' -EndMarker '# === SHELL_ENV_END ===' -Inner $psInner -LegacyPatterns $psLegacy
-if ($psNew -ne $psOld) {
-    # $PROFILE：UTF-8 含 BOM + CRLF
-    [System.IO.File]::WriteAllText($psProfilePath, ($psNew -replace "`n", "`r`n"), $utf8Bom)
-    Write-Host "[PowerShell] 已更新 `$PROFILE 的環境設定區塊。" -ForegroundColor Green
-} else {
-    Write-Host "[PowerShell] 環境設定區塊已是最新，跳過。" -ForegroundColor Yellow
+    $psLegacy = @('(?m)' + [regex]::Escape($psInner.Trim("`n")) + '[ \t]*(\n|\z)')
+    $psOld = Read-Utf8Text $psProfilePath
+    $psNew = Set-ManagedBlock -Text $psOld -StartMarker '# === SHELL_ENV_START ===' -EndMarker '# === SHELL_ENV_END ===' -Inner $psInner -LegacyPatterns $psLegacy
+    if ($psNew -ne $psOld) {
+        # $PROFILE：UTF-8 含 BOM + CRLF
+        [System.IO.File]::WriteAllText($psProfilePath, ($psNew -replace "`n", "`r`n"), $utf8Bom)
+        Write-Host "[PowerShell] 已更新 $psProfilePath 的環境設定區塊。" -ForegroundColor Green
+    } else {
+        Write-Host "[PowerShell] 環境設定區塊已是最新，跳過：$psProfilePath" -ForegroundColor Yellow
+    }
 }

@@ -59,7 +59,7 @@ function Update-MarkedBlock {
 # ------------------------------------------------------------------------------
 # 1. 寫入 PowerShell 設定檔 ($PROFILE)
 # ------------------------------------------------------------------------------
-$psProfilePath = $PROFILE
+$psProfilePath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Microsoft.PowerShell_profile.ps1'
 $psMarker = "# === NATIVE_VENV_AUTO_ACTIVATE_START ==="
 $psEndMarker = "# === NATIVE_VENV_AUTO_ACTIVATE_END ==="
 
@@ -70,127 +70,214 @@ if (-not (Test-Path $psProfilePath)) { New-Item -ItemType File -Force -Path $psP
 $psContent = [System.IO.File]::ReadAllText($psProfilePath, [System.Text.Encoding]::UTF8)
 $psExisted = $psContent -and $psContent -match [regex]::Escape($psMarker)
 
-$psCode = @"
-$psMarker
-# 1. 歷史紀錄最佳化 (忽略重複與空白)；無 PSReadLine 的環境直接略過
-if (Get-Module -ListAvailable PSReadLine) {
-    Set-PSReadLineOption -HistoryNoDuplicates
-    Set-PSReadLineOption -AddToHistoryHandler {
-        param([string]`$line)
-        if ([string]::IsNullOrWhiteSpace(`$line)) { return `$false }
-        if (`$line.StartsWith(" ")) { return `$false }
-        return `$true
+$psCode = @'
+# === NATIVE_VENV_AUTO_ACTIVATE_START ===
+# 1. 歷史紀錄最佳化（僅互動；Set-PSReadLineOption 會隱式載入 PSReadLine，實測無頭行程要多付 ~150ms）
+if (-not $__isHeadless) {
+    if (Get-Module -ListAvailable PSReadLine) {
+        Set-PSReadLineOption -HistoryNoDuplicates
+        Set-PSReadLineOption -AddToHistoryHandler {
+            param([string]$line)
+            if ([string]::IsNullOrWhiteSpace($line)) { return $false }
+            if ($line.StartsWith(" ")) { return $false }
+            return $true
+        }
     }
 }
 
-# 2. 原生極速虛擬環境切換引擎
-# 回傳 `$true 表示目前 PATH 確實指向指定 venv（避免只有 VIRTUAL_ENV、PATH 未切的半啟動）。
+# 2. 原生極速虛擬環境切換引擎（純 .NET，零 cmdlet）
+# 回傳 $true 表示目前 PATH 確實指向指定 venv（避免只有 VIRTUAL_ENV、PATH 未切的半啟動）。
 # 刻意只認 PATH 第一段：排在更前面的 python 才會真正接管命令列。
 # 已知取捨：其他工具 hook 暫時把別的目錄插到最前時，下一個 prompt 會「拔舊掛新」
 # 把 venv bin 推回最前（接受此行為以維持 python 解析正確）。
 function global:_Venv-Is-Live {
-    param([string]`$venvPath, [string]`$binDir)
-    if ([string]::IsNullOrEmpty(`$venvPath)) { return `$false }
-    if (`$env:VIRTUAL_ENV -ne `$venvPath) { return `$false }
-    `$newBin = Join-Path `$venvPath `$binDir
-    `$pathSep = [System.IO.Path]::PathSeparator
-    `$first = (`$env:PATH -split [regex]::Escape(`$pathSep) | Select-Object -First 1)
-    if (`$first -eq `$newBin) { return `$true }
+    param([string]$venvPath, [string]$binDir)
+    if ([string]::IsNullOrEmpty($venvPath)) { return $false }
+    if ($env:VIRTUAL_ENV -ne $venvPath) { return $false }
+    $newBin = [IO.Path]::Combine($venvPath, $binDir)
+    $sep = [IO.Path]::PathSeparator
+    $first = ($env:PATH -split $sep)[0]
+    if ($first -eq $newBin) { return $true }
     try {
-        return ([IO.Path]::GetFullPath(`$first) -eq [IO.Path]::GetFullPath(`$newBin))
+        return ([IO.Path]::GetFullPath($first) -eq [IO.Path]::GetFullPath($newBin))
     } catch {
-        return `$false
+        return $false
     }
 }
 
-# 函式刻意掛 global；命名雖非核准動詞，但以 Auto- / _Venv- 前綴避開與使用者自訂函式衝突
+# 函式刻意掛 global；以 _Venv- / Auto- 前綴避開與使用者自訂函式衝突
 function global:Auto-Activate-Venv {
-    `$current = `$PWD.Path
-    `$venvPath = `$null
+    $current = $PWD.Path
+    $venvPath = $null
 
-    `$isWin = [Environment]::OSVersion.Platform -eq 'Win32NT'
-    `$binDir = if (`$isWin) { "Scripts" } else { "bin" }
-    `$exeName = if (`$isWin) { "python.exe" } else { "python" }
-    `$pathSep = [System.IO.Path]::PathSeparator
+    $isWin = [Environment]::OSVersion.Platform -eq 'Win32NT'
+    $binDir = if ($isWin) { "Scripts" } else { "bin" }
+    $exeName = if ($isWin) { "python.exe" } else { "python" }
+    $sep = [IO.Path]::PathSeparator
 
     # 快速路徑：同一 venv 仍為真啟用狀態，且 cwd 未離開該 venv 子樹 -> 直接返回，零磁碟存取
-    # （向上走訪能找到的 venv 必為 cwd 的祖先；cwd 在 `$env:VIRTUAL_ENV 之下時結果必相同）
-    if (_Venv-Is-Live -venvPath `$env:VIRTUAL_ENV -binDir `$binDir) {
-        if (`$PWD.Path -eq `$env:VIRTUAL_ENV -or
-            `$PWD.Path.StartsWith("`$env:VIRTUAL_ENV`$pathSep", [StringComparison]::OrdinalIgnoreCase)) { return }
+    if (_Venv-Is-Live -venvPath $env:VIRTUAL_ENV -binDir $binDir) {
+        if ($PWD.Path -eq $env:VIRTUAL_ENV -or
+            $PWD.Path.StartsWith("$env:VIRTUAL_ENV$sep", [StringComparison]::OrdinalIgnoreCase)) { return }
     }
 
-    # 向上遞迴尋找虛擬環境
-    while (![string]::IsNullOrEmpty(`$current)) {
-        # 正斜線在 Windows 與 Linux 皆可用；寫死反斜線會讓非 Windows 分支失效
-        if (Test-Path (Join-Path `$current ".venv/`$binDir/`$exeName")) {
-            `$venvPath = Join-Path `$current ".venv"; break
+    # 向上遞迴尋找虛擬環境（.venv 優先於 venv；正斜線在 Windows/Linux 皆可用）
+    while (![string]::IsNullOrEmpty($current)) {
+        if ([IO.File]::Exists([IO.Path]::Combine($current, ".venv/$binDir/$exeName"))) {
+            $venvPath = [IO.Path]::Combine($current, '.venv'); break
         }
-        if (Test-Path (Join-Path `$current "venv/`$binDir/`$exeName")) {
-            `$venvPath = Join-Path `$current "venv"; break
+        if ([IO.File]::Exists([IO.Path]::Combine($current, "venv/$binDir/$exeName"))) {
+            $venvPath = [IO.Path]::Combine($current, 'venv'); break
         }
-        `$parent = Split-Path `$current -Parent
-        if (`$parent -eq `$current) { break }
-        `$current = `$parent
+        $parent = [IO.Path]::GetDirectoryName($current)
+        if ($null -eq $parent -or $parent -eq $current) { break }
+        $current = $parent
     }
 
     # 已真正啟用同一環境 -> 跳過
-    if (_Venv-Is-Live -venvPath `$venvPath -binDir `$binDir) { return }
+    if (_Venv-Is-Live -venvPath $venvPath -binDir $binDir) { return }
 
-    # 退出舊環境：從 PATH 中拔除舊的 bin/Scripts 路徑
-    if (`$env:VIRTUAL_ENV) {
-        `$oldBin = Join-Path `$env:VIRTUAL_ENV `$binDir
-        # 大小寫與結尾反斜線差異的殘留也一併清掉
-        `$paths = `$env:PATH -split [regex]::Escape(`$pathSep) |
-            Where-Object { `$_.TrimEnd('\') -ine `$oldBin.TrimEnd('\') }
-        `$env:PATH = `$paths -join `$pathSep
-        `$env:VIRTUAL_ENV = `$null
+    # 退出舊環境：從 PATH 中拔除舊的 bin/Scripts 路徑（保留空項以維持原 PATH 結構）
+    if ($env:VIRTUAL_ENV) {
+        $oldBin = [IO.Path]::Combine($env:VIRTUAL_ENV, $binDir)
+        $paths = foreach ($p in ($env:PATH -split $sep)) {
+            if ($p.TrimEnd('\') -ine $oldBin.TrimEnd('\')) { $p }
+        }
+        $env:PATH = $paths -join $sep
+        $env:VIRTUAL_ENV = $null
     }
 
     # 進入新環境：把新的 bin/Scripts 路徑塞入 PATH 最前方
-    if (`$venvPath) {
-        `$env:VIRTUAL_ENV = `$venvPath
-        `$newBin = Join-Path `$venvPath `$binDir
-        `$env:PATH = "`$newBin`$pathSep`$env:PATH"
+    if ($venvPath) {
+        $env:VIRTUAL_ENV = $venvPath
+        $newBin = [IO.Path]::Combine($venvPath, $binDir)
+        $env:PATH = "$newBin$sep$env:PATH"
     }
 }
 
-# 3. 畫面渲染攔截 (內建 Oh-My-Posh 快取；每次 prompt 都檢查半啟動)
-# 注意：本區塊請保持在 `$PROFILE 尾端——若其後才執行 oh-my-posh init，
-# prompt 會被重設，本攔截即失效
-`$global:_venv_has_omp = [bool](Get-Command oh-my-posh -ErrorAction SilentlyContinue)
-
-if (-not `$global:_venv_original_prompt) {
-    if (Test-Path "Function:\prompt") { `$global:_venv_original_prompt = `$function:prompt }
-    else { `$global:_venv_original_prompt = { "PS `$(`$executionContext.SessionState.Path.CurrentLocation)> " } }
+# 3. Prompt（僅互動用；函式定義本身零成本，無頭行程只多付解析）
+if (-not $global:_venv_original_prompt) {
+    if ($function:prompt) { $global:_venv_original_prompt = $function:prompt }
+    else { $global:_venv_original_prompt = { "PS $($executionContext.SessionState.Path.CurrentLocation)> " } }
 }
 
 function global:prompt {
     Auto-Activate-Venv
 
-    if (-not `$global:_venv_has_omp) {
-        if (`$env:VIRTUAL_ENV) {
-            `$venvName = Split-Path `$env:VIRTUAL_ENV -Leaf
-            Write-Host -NoNewline -ForegroundColor Green "(`$venvName) "
-        }
+    if ($env:VIRTUAL_ENV) {
+        Write-Host -NoNewline -ForegroundColor Green "($([IO.Path]::GetFileName($env:VIRTUAL_ENV))) "
     }
 
-    & `$global:_venv_original_prompt
+    & $global:_venv_original_prompt
 }
 
 # Profile 載入時直接執行一次（非互動式 / Agent 終端不會畫 prompt）
 Auto-Activate-Venv
-$psEndMarker
-"@
+# === NATIVE_VENV_AUTO_ACTIVATE_END ===
+'@
 
 $psUpdated = Update-MarkedBlock -Content $psContent -StartMarker $psMarker -EndMarker $psEndMarker -NewBlock $psCode
-[System.IO.File]::WriteAllText($psProfilePath, $psUpdated.TrimEnd("`r", "`n") + "`r`n", [System.Text.UTF8Encoding]::new($true))
-if ($psExisted) {
-    Write-Host "[PowerShell] 已更新 `$PROFILE 內的 venv 自動啟動區塊。" -ForegroundColor Green
+$psFinal = $psUpdated.TrimEnd("`r", "`n") + "`r`n"
+if ($psFinal -ne $psContent) {
+    [System.IO.File]::WriteAllText($psProfilePath, $psFinal, [System.Text.UTF8Encoding]::new($true))
+    if ($psExisted) {
+        Write-Host "[PowerShell] 已更新 `$PROFILE 內的 venv 自動啟動區塊。" -ForegroundColor Green
+    } else {
+        Write-Host "[PowerShell] 已成功寫入 `$PROFILE！" -ForegroundColor Green
+    }
 } else {
-    Write-Host "[PowerShell] 已成功寫入 `$PROFILE！" -ForegroundColor Green
+    Write-Host "[PowerShell] venv 區塊已是最新，跳過。" -ForegroundColor Yellow
 }
 
+$ps5ShimCode = @'
+# === AUTO UPGRADE TO POWERSHELL 7_START ===
+# 本檔已精簡為「轉導 shim」：正典環境設定（git PATH / UTF-8 / venv 引擎 / prompt）
+# 統一維護在 pwsh 的 $PROFILE（Documents\PowerShell\Microsoft.PowerShell_profile.ps1）。
+# 這裡只保留轉導邏輯，以及 pwsh 不存在／轉導失敗／-NonInteractive 自動化時的最小 fallback。
+if ($Host.Name -eq 'ConsoleHost' -and $PSVersionTable.PSVersion.Major -eq 5 -and -not $env:__PWSH_REDIRECT) {
+    $cl = [Environment]::GetCommandLineArgs()
+    # 非互動模式直接略過轉導（-NonInteractive 不會跳過 profile，所以這裡必須自己擋）
+    if ($cl -match '^[/-]noni') { return }
+
+    # 純 .NET 掃 PATH 找 pwsh（Get-Command/Test-Path 會觸發 PS5 的模組自動載入掃描）
+    $pwsh = $null
+    foreach ($dir in @(($env:Path -split ';'), "$env:ProgramW6432\PowerShell\7", "$env:ProgramFiles\PowerShell\7")) {
+        foreach ($d in $dir) {
+            if (-not $d) { continue }
+            $cand = [IO.Path]::Combine($d, 'pwsh.exe')
+            try { if ([IO.File]::Exists($cand) -and [IO.FileInfo]::new($cand).Length -gt 0) { $pwsh = $cand; break } } catch { }
+        }
+        if ($pwsh) { break }
+    }
+
+    if ($pwsh) {
+        $env:__PWSH_REDIRECT = 1
+
+        # 使用原始命令列（去掉第一個 token 即 powershell.exe 路徑），避免重新加引號破壞參數
+        $raw  = [Environment]::CommandLine
+        $tail = ($raw -replace '^\s*(?:"[^"]*"|\S+)\s*', '')
+        if ([string]::IsNullOrWhiteSpace($tail)) { $tail = '-NoLogo' }
+
+        # 先編譯 ExitProcess P/Invoke（~130ms），讓後面 wait 完的退出側接近零成本
+        Add-Type -Namespace Native -Name Kernel32 -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true)] public static extern void ExitProcess(uint uExitCode);' -ErrorAction SilentlyContinue
+
+        try {
+            # PS5.1 的 Start-Process -Wait 有 ~1 秒固定 overhead（實測 cmd /c exit 也要 1 秒）；
+            # 改用 .NET ProcessStartInfo：Arguments 原樣傳遞、繼承同一個 console、wait 幾乎零成本
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $pwsh
+            $psi.Arguments = $tail
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $false
+            $p = [System.Diagnostics.Process]::Start($psi)
+            $p.WaitForExit()
+            $code = $p.ExitCode
+            if ($null -eq $code) { $code = 0 }
+            # 強制終止 PS5 行程，避免 PS5 再次執行 -Command / -File payload。
+            # 注意：[Environment]::Exit 會觸發 CLR 強制關機，實測要 ~2.4 秒；
+            # 改用 Win32 ExitProcess 立即終止（exit code 以 32-bit 無號數帶入，負值自動取低 32 位）
+            [Native.Kernel32]::ExitProcess([uint32]($code -band 0xFFFFFFFF))
+        } catch {
+            # pwsh 啟動失敗就放棄轉導，繼續以 PS5 正常啟動（落到下面的 fallback）
+        }
+    }
+}
+# === AUTO UPGRADE TO POWERSHELL 7_END ===
+'@
+# ------------------------------------------------------------------------------
+# 2.4 寫入 Windows PowerShell 5.1 的轉導 shim（Documents\WindowsPowerShell）
+#     正典環境設定在 pwsh 的 $PROFILE；PS5 這份只負責轉導 + 最小 fallback
+#     （fallback 的 SHELL_ENV 區塊由 shell-env.ps1 管理，會寫進同一檔案尾端）。
+#     若偵測到舊版 NATIVE_VENV 區塊會一併移除（PS5 不再需要 venv 引擎）。
+# ------------------------------------------------------------------------------
+$ps5ProfilePath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'
+$ps5Dir = Split-Path $ps5ProfilePath
+if (-not (Test-Path $ps5Dir)) { New-Item -ItemType Directory -Force -Path $ps5Dir | Out-Null }
+$ps5Content = if (Test-Path $ps5ProfilePath) { [System.IO.File]::ReadAllText($ps5ProfilePath, [System.Text.Encoding]::UTF8) } else { '' }
+$ps5Marker = '# === AUTO UPGRADE TO POWERSHELL 7_START ==='
+$ps5EndMarker = '# === AUTO UPGRADE TO POWERSHELL 7_END ==='
+$venvStart = '# === NATIVE_VENV_AUTO_ACTIVATE_START ==='
+$venvEnd = '# === NATIVE_VENV_AUTO_ACTIVATE_END ==='
+# 移除舊版 venv 區塊（正典已移至 pwsh）
+$i2 = $ps5Content.IndexOf($venvStart)
+if ($i2 -ge 0) {
+    $j2 = $ps5Content.IndexOf($venvEnd, $i2)
+    if ($j2 -lt 0) { $j2 = $ps5Content.Length } else { $j2 += $venvEnd.Length }
+    $ps5Content = $ps5Content.Substring(0, $i2) + $ps5Content.Substring($j2)
+}
+if ($ps5Content.IndexOf($ps5Marker) -ge 0) {
+    $ps5Updated = Update-MarkedBlock -Content $ps5Content -StartMarker $ps5Marker -EndMarker $ps5EndMarker -NewBlock $ps5ShimCode
+} else {
+    # 首次部署：redirect 區塊放在檔案最上方（轉導成功時不白跑後面的 fallback）
+    $ps5Updated = $ps5ShimCode.TrimEnd("`r", "`n") + "`r`n`r`n" + $ps5Content.TrimEnd("`r", "`n")
+}
+$ps5Final = $ps5Updated.TrimEnd("`r", "`n") + "`r`n"
+if ($ps5Final -ne $ps5Content) {
+    [System.IO.File]::WriteAllText($ps5ProfilePath, $ps5Final, [System.Text.UTF8Encoding]::new($true))
+    Write-Host "[PowerShell 5.1] 已寫入轉導 shim：$ps5ProfilePath" -ForegroundColor Green
+} else {
+    Write-Host "[PowerShell 5.1] 轉導 shim 已是最新，跳過。" -ForegroundColor Yellow
+}
 # ------------------------------------------------------------------------------
 # 2. 寫入 Bash 設定檔 (~/.bashrc)
 # ------------------------------------------------------------------------------
@@ -244,8 +331,8 @@ auto_activate_venv() {
             break
         fi
         local prev="$target_dir"
-        target_dir="$(dirname "$target_dir")"
-        # dirname 不再縮短（磁碟根/相對路徑）即到底，防止無限迴圈
+        target_dir="${target_dir%/*}"
+        # forkless dirname：${var%/*} 純參數展開，省去每層一次 fork（MSYS fork 實測 ~20ms/次）；不再縮短即到底，防止無限迴圈
         [ "$target_dir" = "$prev" ] && break
     done
     # 情況 A：離開專案或切換到其他環境 -> 自動 deactivate
@@ -288,11 +375,15 @@ $bashCodeUnix = ConvertTo-UnixLineEnding $bashCode
 $bashContentNorm = ConvertTo-UnixLineEnding $bashContent
 $bashUpdated = Update-MarkedBlock -Content $bashContentNorm -StartMarker $bashMarker -EndMarker $bashEndMarker -NewBlock $bashCodeUnix.TrimStart("`n")
 $bashUpdatedUnix = ConvertTo-UnixLineEnding $bashUpdated
-[System.IO.File]::WriteAllText($bashrcPath, $bashUpdatedUnix, [System.Text.UTF8Encoding]::new($false))
-if ($bashExisted) {
-    Write-Host "[Bash] 已更新 $bashrcPath 內的 venv 自動啟動區塊。" -ForegroundColor Green
+if ($bashUpdatedUnix -ne $bashContentNorm) {
+    [System.IO.File]::WriteAllText($bashrcPath, $bashUpdatedUnix, [System.Text.UTF8Encoding]::new($false))
+    if ($bashExisted) {
+        Write-Host "[Bash] 已更新 $bashrcPath 內的 venv 自動啟動區塊。" -ForegroundColor Green
+    } else {
+        Write-Host "[Bash] 已成功寫入 $bashrcPath ！” -ForegroundColor Green
+    }
 } else {
-    Write-Host "[Bash] 已成功寫入 $bashrcPath ！” -ForegroundColor Green
+    Write-Host "[Bash] venv 區塊已是最新，跳過。" -ForegroundColor Yellow
 }
 
 # ------------------------------------------------------------------------------
