@@ -123,6 +123,23 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 if ($PSVersionTable.PSVersion.Major -le 5) {
     [console]::InputEncoding = [console]::OutputEncoding = [System.Text.Encoding]::UTF8
 }
+
+# PS5 專屬：升級熱鍵——互動 prompt 按 Alt+` → 清屏並啟動巢狀 pwsh（含完整環境）。
+# 巢狀而非轉導：自動化呼叫（-Command/-File/-EncodedCommand）保留真 5.1；巢狀 pwsh 裡再按 = 無操作。
+if ($PSVersionTable.PSVersion.Major -le 5) {
+    $cl = [Environment]::GetCommandLineArgs()
+    if (-not ($cl -match '^[/-](command|c|file|f|encodedcommand|e|noni|noninteractive)')) {
+        try {
+            # 可用 chord：Alt+`、Shift+F2；不可用（實測不派送或有副作用）：Ctrl+Alt 系、Shift+可印字元、Ctrl+字母、Alt+Q
+            Set-PSReadLineKeyHandler -Chord 'Alt+`' -ScriptBlock {
+                # clear-host 在接受指令後才執行，會把「輸入的 pwsh 那行」和 PS5 banner 一起擦掉，
+                # 畫面只剩 pwsh 的 banner + prompt，看起來像直接開了一個全新的 pwsh
+                [Microsoft.PowerShell.PSConsoleReadLine]::Insert('clear-host; pwsh')
+                [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
+            }
+        } catch { }
+    }
+}
 '@ -replace "`r`n", "`n"
 
 # 正典 pwsh profile（Documents\PowerShell）與 PS5 fallback（Documents\WindowsPowerShell）

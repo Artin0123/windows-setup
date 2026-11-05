@@ -195,8 +195,8 @@ if (($psFinal -replace "`r`n", "`n") -ne ($psContent -replace "`r`n", "`n")) {
     Write-Host "[PowerShell] venv 區塊已是最新，跳過。" -ForegroundColor Yellow
 }
 
-# PS5（Documents\WindowsPowerShell）刻意不做任何轉導：期待 5.1 的呼叫端得到真 5.1 語意；
-# 它的環境 fallback（git PATH / UTF-8）由 shell-env.ps1 管理。
+# PS5（Documents\WindowsPowerShell）不做任何轉導：期待 5.1 的呼叫端得到真 5.1 語意。
+# PS5 互動的「升級到 7」改由下面的熱鍵處理（巢狀，非轉導）。
 # ------------------------------------------------------------------------------
 # 2. 寫入 Bash 設定檔 (~/.bashrc)
 # ------------------------------------------------------------------------------
