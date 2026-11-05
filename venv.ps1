@@ -82,14 +82,12 @@ if ($env:TERM_PROGRAM -eq 'vscode') { $__isHeadless = $false }
 
 # 1. 歷史紀錄最佳化（僅互動；Set-PSReadLineOption 會隱式載入 PSReadLine，實測無頭行程要多付 ~150ms）
 if (-not $__isHeadless) {
-    if (Get-Module -ListAvailable PSReadLine) {
-        Set-PSReadLineOption -HistoryNoDuplicates
-        Set-PSReadLineOption -AddToHistoryHandler {
-            param([string]$line)
-            if ([string]::IsNullOrWhiteSpace($line)) { return $false }
-            if ($line.StartsWith(" ")) { return $false }
-            return $true
-        }
+    Set-PSReadLineOption -HistoryNoDuplicates
+    Set-PSReadLineOption -AddToHistoryHandler {
+        param([string]$line)
+        if ([string]::IsNullOrWhiteSpace($line)) { return $false }
+        if ($line.StartsWith(" ")) { return $false }
+        return $true
     }
 }
 
@@ -118,9 +116,9 @@ function global:Auto-Activate-Venv {
     $current = $PWD.Path
     $venvPath = $null
 
-    $isWin = [Environment]::OSVersion.Platform -eq 'Win32NT'
-    $binDir = if ($isWin) { "Scripts" } else { "bin" }
-    $exeName = if ($isWin) { "python.exe" } else { "python" }
+    # 本 profile 僅部署於 Windows；POSIX（bin/python）分支已移除——bash 版引擎在 .bashrc
+    $binDir = "Scripts"
+    $exeName = "python.exe"
     $sep = [IO.Path]::PathSeparator
 
     # 快速路徑：同一 venv 仍為真啟用狀態，且 cwd 未離開該 venv 子樹 -> 直接返回，零磁碟存取
@@ -197,95 +195,8 @@ if (($psFinal -replace "`r`n", "`n") -ne ($psContent -replace "`r`n", "`n")) {
     Write-Host "[PowerShell] venv 區塊已是最新，跳過。" -ForegroundColor Yellow
 }
 
-$ps5ShimCode = @'
-# === AUTO UPGRADE TO POWERSHELL 7_START ===
-# 本檔已精簡為「轉導 shim」：正典環境設定（git PATH / UTF-8 / venv 引擎 / prompt）
-# 統一維護在 pwsh 的 $PROFILE（Documents\PowerShell\Microsoft.PowerShell_profile.ps1）。
-# 這裡只保留轉導邏輯，以及 pwsh 不存在／轉導失敗／-NonInteractive 自動化時的最小 fallback。
-if ($Host.Name -eq 'ConsoleHost' -and $PSVersionTable.PSVersion.Major -eq 5 -and -not $env:__PWSH_REDIRECT) {
-    $cl = [Environment]::GetCommandLineArgs()
-    # 非互動模式直接略過轉導（-NonInteractive 不會跳過 profile，所以這裡必須自己擋）
-    if ($cl -match '^[/-]noni') { return }
-
-    # 純 .NET 掃 PATH 找 pwsh（Get-Command/Test-Path 會觸發 PS5 的模組自動載入掃描）
-    $pwsh = $null
-    foreach ($dir in @(($env:Path -split ';'), "$env:ProgramW6432\PowerShell\7", "$env:ProgramFiles\PowerShell\7")) {
-        foreach ($d in $dir) {
-            if (-not $d) { continue }
-            $cand = [IO.Path]::Combine($d, 'pwsh.exe')
-            try { if ([IO.File]::Exists($cand) -and [IO.FileInfo]::new($cand).Length -gt 0) { $pwsh = $cand; break } } catch { }
-        }
-        if ($pwsh) { break }
-    }
-
-    if ($pwsh) {
-        $env:__PWSH_REDIRECT = 1
-
-        # 使用原始命令列（去掉第一個 token 即 powershell.exe 路徑），避免重新加引號破壞參數
-        $raw  = [Environment]::CommandLine
-        $tail = ($raw -replace '^\s*(?:"[^"]*"|\S+)\s*', '')
-        if ([string]::IsNullOrWhiteSpace($tail)) { $tail = '-NoLogo' }
-
-        # 先編譯 ExitProcess P/Invoke（~130ms），讓後面 wait 完的退出側接近零成本
-        Add-Type -Namespace Native -Name Kernel32 -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true)] public static extern void ExitProcess(uint uExitCode);' -ErrorAction SilentlyContinue
-
-        try {
-            # PS5.1 的 Start-Process -Wait 有 ~1 秒固定 overhead（實測 cmd /c exit 也要 1 秒）；
-            # 改用 .NET ProcessStartInfo：Arguments 原樣傳遞、繼承同一個 console、wait 幾乎零成本
-            $psi = New-Object System.Diagnostics.ProcessStartInfo
-            $psi.FileName = $pwsh
-            $psi.Arguments = $tail
-            $psi.UseShellExecute = $false
-            $psi.CreateNoWindow = $false
-            $p = [System.Diagnostics.Process]::Start($psi)
-            $p.WaitForExit()
-            $code = $p.ExitCode
-            if ($null -eq $code) { $code = 0 }
-            # 強制終止 PS5 行程，避免 PS5 再次執行 -Command / -File payload。
-            # 注意：[Environment]::Exit 會觸發 CLR 強制關機，實測要 ~2.4 秒；
-            # 改用 Win32 ExitProcess 立即終止（exit code 以 32-bit 無號數帶入，負值自動取低 32 位）
-            [Native.Kernel32]::ExitProcess([uint32]($code -band 0xFFFFFFFF))
-        } catch {
-            # pwsh 啟動失敗就放棄轉導，繼續以 PS5 正常啟動（落到下面的 fallback）
-        }
-    }
-}
-# === AUTO UPGRADE TO POWERSHELL 7_END ===
-'@
-# ------------------------------------------------------------------------------
-# 2.4 寫入 Windows PowerShell 5.1 的轉導 shim（Documents\WindowsPowerShell）
-#     正典環境設定在 pwsh 的 $PROFILE；PS5 這份只負責轉導 + 最小 fallback
-#     （fallback 的 SHELL_ENV 區塊由 shell-env.ps1 管理，會寫進同一檔案尾端）。
-#     若偵測到舊版 NATIVE_VENV 區塊會一併移除（PS5 不再需要 venv 引擎）。
-# ------------------------------------------------------------------------------
-$ps5ProfilePath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'
-$ps5Dir = Split-Path $ps5ProfilePath
-if (-not (Test-Path $ps5Dir)) { New-Item -ItemType Directory -Force -Path $ps5Dir | Out-Null }
-$ps5Content = if (Test-Path $ps5ProfilePath) { [System.IO.File]::ReadAllText($ps5ProfilePath, [System.Text.Encoding]::UTF8) } else { '' }
-$ps5Marker = '# === AUTO UPGRADE TO POWERSHELL 7_START ==='
-$ps5EndMarker = '# === AUTO UPGRADE TO POWERSHELL 7_END ==='
-$venvStart = '# === NATIVE_VENV_AUTO_ACTIVATE_START ==='
-$venvEnd = '# === NATIVE_VENV_AUTO_ACTIVATE_END ==='
-# 移除舊版 venv 區塊（正典已移至 pwsh）
-$i2 = $ps5Content.IndexOf($venvStart)
-if ($i2 -ge 0) {
-    $j2 = $ps5Content.IndexOf($venvEnd, $i2)
-    if ($j2 -lt 0) { $j2 = $ps5Content.Length } else { $j2 += $venvEnd.Length }
-    $ps5Content = $ps5Content.Substring(0, $i2) + $ps5Content.Substring($j2)
-}
-if ($ps5Content.IndexOf($ps5Marker) -ge 0) {
-    $ps5Updated = Update-MarkedBlock -Content $ps5Content -StartMarker $ps5Marker -EndMarker $ps5EndMarker -NewBlock $ps5ShimCode
-} else {
-    # 首次部署：redirect 區塊放在檔案最上方（轉導成功時不白跑後面的 fallback）
-    $ps5Updated = $ps5ShimCode.TrimEnd("`r", "`n") + "`r`n`r`n" + $ps5Content.TrimEnd("`r", "`n")
-}
-$ps5Final = $ps5Updated.TrimEnd("`r", "`n") + "`r`n"
-if (($ps5Final -replace "`r`n", "`n") -ne ($ps5Content -replace "`r`n", "`n")) {
-    [System.IO.File]::WriteAllText($ps5ProfilePath, $ps5Final, [System.Text.UTF8Encoding]::new($true))
-    Write-Host "[PowerShell 5.1] 已寫入轉導 shim：$ps5ProfilePath" -ForegroundColor Green
-} else {
-    Write-Host "[PowerShell 5.1] 轉導 shim 已是最新，跳過。" -ForegroundColor Yellow
-}
+# PS5（Documents\WindowsPowerShell）刻意不做任何轉導：期待 5.1 的呼叫端得到真 5.1 語意；
+# 它的環境 fallback（git PATH / UTF-8）由 shell-env.ps1 管理。
 # ------------------------------------------------------------------------------
 # 2. 寫入 Bash 設定檔 (~/.bashrc)
 # ------------------------------------------------------------------------------

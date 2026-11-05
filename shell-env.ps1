@@ -91,9 +91,25 @@ if ($bashNew -ne $bashOld) {
 $psInner = @'
 # 效能原則：此檔每個新 pwsh 行程都會執行，熱路徑一律用 .NET BCL（[IO.*]）而非 cmdlet——
 # Join-Path/Test-Path 在全新行程會觸發模組自動載入掃描（實測 +150ms），[IO.*] 只要 +35ms。
-# scoop 的 current junction 直接指向最新安裝版；一次存在性檢查取代逐目錄掃描（實測 49ms → 9ms）
-$GitBashBin = [IO.Path]::Combine($HOME, 'scoop\apps\git\current\bin')
-if (-not [IO.File]::Exists([IO.Path]::Combine($GitBashBin, 'bash.exe'))) { $GitBashBin = $null }
+# ⚠️ 刻意不用 scoop 的 current junction（scoop\apps\git\current\bin），改用版本目錄掃描——這是設計決策，勿改回：
+# junction 路徑會被外部程式快取或寫入登錄（系統匣圖示、捷徑解析等），scoop 更新換版後
+# 舊的快取/登錄資訊會指錯而失效，實例見 v2rayN #5759：
+# https://github.com/2dust/v2rayN/issues/5759#issuecomment-3476104944
+# 多花幾 ms 換取 PATH 永遠指向真實版本目錄，值得。以下以純 .NET 實作掃描（不用 cmdlet，
+# 避免每個新 pwsh 行程觸發模組自動載入掃描，實測 cmdlet 版 +150ms）。
+$GitBashBin = $null
+$gitApps = [IO.Path]::Combine($HOME, 'scoop\apps\git')
+if ([IO.Directory]::Exists($gitApps)) {
+    $bestName = $null; $bestVer = $null
+    foreach ($d in [IO.Directory]::EnumerateDirectories($gitApps)) {
+        $n = [IO.Path]::GetFileName($d)
+        if ($n -notmatch '^\d+(\.\d+)+') { continue }
+        if (-not [IO.File]::Exists([IO.Path]::Combine($d, 'bin\bash.exe'))) { continue }
+        $v = [version]($n -replace '-.*$', '')
+        if ($null -eq $bestVer -or $v -gt $bestVer) { $bestName = $n; $bestVer = $v }
+    }
+    if ($bestName) { $GitBashBin = [IO.Path]::Combine($gitApps, $bestName, 'bin') }
+}
 
 if ($GitBashBin -and (($env:Path -split ';') -notcontains $GitBashBin)) {
     $env:Path = "$GitBashBin;$env:Path"
@@ -103,7 +119,10 @@ if ($GitBashBin -and (($env:Path -split ';') -notcontains $GitBashBin)) {
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 
 # 設定 Console 輸出與輸入的編碼為 UTF-8
-[console]::InputEncoding = [console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# （pwsh 7 啟動時已是 UTF-8——實測 [Console]::Input/OutputEncoding 均為 utf-8，此行只對 PS5 有意義）
+if ($PSVersionTable.PSVersion.Major -le 5) {
+    [console]::InputEncoding = [console]::OutputEncoding = [System.Text.Encoding]::UTF8
+}
 '@ -replace "`r`n", "`n"
 
 # 正典 pwsh profile（Documents\PowerShell）與 PS5 fallback（Documents\WindowsPowerShell）
