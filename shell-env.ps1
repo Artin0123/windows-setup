@@ -84,14 +84,6 @@ if ($bashNew -ne $bashOld) {
     Write-Host "[Bash] 環境變數區塊已是最新，跳過。" -ForegroundColor Yellow
 }
 
-# API key 放在區塊外：只在 .bashrc 完全沒有該變數時才補上空字串占位，已存在（含你填好的值）一律不動
-$bashCur = Read-Utf8Text $bashrcPath
-$missing = @('FIRECRAWL_API_KEY') | Where-Object { $bashCur -notmatch ('(?m)^\s*export\s+' + $_ + '=') }
-if ($missing) {
-    $add = ($missing | ForEach-Object { "export $_=`"`"" }) -join "`n"
-    [System.IO.File]::WriteAllText($bashrcPath, $bashCur.TrimEnd("`n") + "`n`n" + $add + "`n", $utf8NoBom)
-    Write-Host "[Bash] 已補上空白 API key 占位：$($missing -join ', ')（請自行填入）" -ForegroundColor Yellow
-}
 
 # ------------------------------------------------------------------------------
 # 2. PowerShell ($PROFILE)
@@ -134,5 +126,16 @@ foreach ($psProfilePath in $psTargets) {
         Write-Host "[PowerShell] 已更新 $psProfilePath 的環境設定區塊。" -ForegroundColor Green
     } else {
         Write-Host "[PowerShell] 環境設定區塊已是最新，跳過：$psProfilePath" -ForegroundColor Yellow
+    }
+}
+
+# FIRECRAWL_API_KEY 空值占位：只放 pwsh 的 $PROFILE；
+# 門檻是「檔案裡有沒有賦值行」——使用者填過值之後，此段永遠不會再動它
+foreach ($psProfilePath in ($psTargets | Where-Object { $_ -notmatch 'WindowsPowerShell' })) {
+    $psCur = Read-Utf8Text $psProfilePath
+    if ($psCur -notmatch '(?m)^\s*\$env:FIRECRAWL_API_KEY\s*=') {
+        $apiBlock = '# === API_KEY_PLACEHOLDER_START ===' + "`n" + '$env:FIRECRAWL_API_KEY = ''''' + "`n" + '# === API_KEY_PLACEHOLDER_END ==='
+        [System.IO.File]::WriteAllText($psProfilePath, ($psCur.TrimEnd("`n") + "`n`n" + ($apiBlock -replace "`n", "`r`n") + "`n"), $utf8Bom)
+        Write-Host '[PowerShell] 已補上 FIRECRAWL_API_KEY 空值占位（請自行填入 key）。' -ForegroundColor Yellow
     }
 }

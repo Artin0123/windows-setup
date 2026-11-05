@@ -72,6 +72,14 @@ $psExisted = $psContent -and $psContent -match [regex]::Escape($psMarker)
 
 $psCode = @'
 # === NATIVE_VENV_AUTO_ACTIVATE_START ===
+# === 無頭判定 ===
+# 輸出被重導、或以 -Command/-EncodedCommand/-NonInteractive 啟動者視為無頭（不畫 prompt）。
+# 注意：VSCode/Cursor 終端以 -Command 注入 shell integration，但輸出未被重導；
+# 為避免誤判，TERM_PROGRAM=vscode 一律視為互動。
+$__cl = [Environment]::GetCommandLineArgs()
+$__isHeadless = [Console]::IsOutputRedirected -or [bool]($__cl -match '^(-NonInteractive|-NonI|-Command|-C|-EncodedCommand|-E)$')
+if ($env:TERM_PROGRAM -eq 'vscode') { $__isHeadless = $false }
+
 # 1. 歷史紀錄最佳化（僅互動；Set-PSReadLineOption 會隱式載入 PSReadLine，實測無頭行程要多付 ~150ms）
 if (-not $__isHeadless) {
     if (Get-Module -ListAvailable PSReadLine) {
@@ -178,7 +186,7 @@ Auto-Activate-Venv
 
 $psUpdated = Update-MarkedBlock -Content $psContent -StartMarker $psMarker -EndMarker $psEndMarker -NewBlock $psCode
 $psFinal = $psUpdated.TrimEnd("`r", "`n") + "`r`n"
-if ($psFinal -ne $psContent) {
+if (($psFinal -replace "`r`n", "`n") -ne ($psContent -replace "`r`n", "`n")) {
     [System.IO.File]::WriteAllText($psProfilePath, $psFinal, [System.Text.UTF8Encoding]::new($true))
     if ($psExisted) {
         Write-Host "[PowerShell] 已更新 `$PROFILE 內的 venv 自動啟動區塊。" -ForegroundColor Green
@@ -272,7 +280,7 @@ if ($ps5Content.IndexOf($ps5Marker) -ge 0) {
     $ps5Updated = $ps5ShimCode.TrimEnd("`r", "`n") + "`r`n`r`n" + $ps5Content.TrimEnd("`r", "`n")
 }
 $ps5Final = $ps5Updated.TrimEnd("`r", "`n") + "`r`n"
-if ($ps5Final -ne $ps5Content) {
+if (($ps5Final -replace "`r`n", "`n") -ne ($ps5Content -replace "`r`n", "`n")) {
     [System.IO.File]::WriteAllText($ps5ProfilePath, $ps5Final, [System.Text.UTF8Encoding]::new($true))
     Write-Host "[PowerShell 5.1] 已寫入轉導 shim：$ps5ProfilePath" -ForegroundColor Green
 } else {
