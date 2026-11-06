@@ -125,13 +125,19 @@ if ($GitBashBin -and (($env:Path -split ';') -notcontains $GitBashBin)) {
     $env:Path = "$GitBashBin;$env:Path"
 }
 
-# 設定 PowerShell 預設讀寫檔案的編碼為 UTF-8
-$PSDefaultParameterValues['*:Encoding'] = 'utf8'
+# Console 輸入/輸出編碼（native 程式的 stdin 解碼／stdout 解碼，兩個方向各管一邊，缺一不可——已實測）。
+# ⚠️ PS5 與 pwsh 7 都要設，不能用版本判斷排除 pwsh：pwsh 7 只有在「繼承了父行程的 65001 console」時才是 UTF-8；
+# 無頭 spawn（工具/IDE 在沒有 console 的情況下起行程，會新建隱藏 console，code page 回落系統 OEM，簡中是 936）
+# 實測 [Console]::OutputEncoding 是 936，native 程式的輸出會被當 GBK 解碼而亂碼。互動視窗測到 65001 不代表無頭也是。
+[console]::InputEncoding = [console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 設定 Console 輸出與輸入的編碼為 UTF-8
-# （pwsh 7 啟動時已是 UTF-8——實測 [Console]::Input/OutputEncoding 均為 utf-8，此行只對 PS5 有意義）
+# 以下兩項只有 PS5 需要；pwsh 7 的預設已是 UTF-8 無 BOM（實測），設了反而可能多出 BOM 或等於沒作用。
 if ($PSVersionTable.PSVersion.Major -le 5) {
-    [console]::InputEncoding = [console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    # cmdlet 寫檔（Out-File/Set-Content…）的預設編碼：PS5 預設是系統 ANSI（GBK），改成 UTF-8（含 BOM）
+    $PSDefaultParameterValues['*:Encoding'] = 'utf8'
+    # PowerShell 餵給 native 程式 stdin 的編碼：PS5 預設 ASCII，中文會變成 ?；
+    # 必須用「無 BOM」的 UTF-8——直接用 [Text.Encoding]::UTF8 會在 stdin 開頭多送一個 BOM（實測）
+    $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 }
 
 # PS5 專屬：升級熱鍵——互動 prompt 按 Alt+` → 清屏並啟動巢狀 pwsh（含完整環境）。
