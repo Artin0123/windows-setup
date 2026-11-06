@@ -57,28 +57,20 @@ function Update-MarkedBlock {
 }
 
 # ------------------------------------------------------------------------------
-# 1. 寫入 PowerShell 設定檔 ($PROFILE)
+# 1. 寫入兩個引擎的 PowerShell 設定檔（pwsh 正典 + PS5 同內容）
 # ------------------------------------------------------------------------------
-$psProfilePath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Microsoft.PowerShell_profile.ps1'
+# 兩個引擎的 CurrentUserCurrentHost profile 都部署同一份 venv 區塊：
+#   pwsh（Documents\PowerShell）= 正典；PS5（Documents\WindowsPowerShell）= 同內容
+. (Join-Path $PSScriptRoot 'profile-common.ps1')    # $PsProfileTargets、$HeadlessSnippet
+$psTargets = foreach ($p in $PsProfileTargets) {
+    @{ Path = $p; Label = $(if ($p -match 'WindowsPowerShell') { 'PS5' } else { 'pwsh' }) }
+}
 $psMarker = "# === NATIVE_VENV_AUTO_ACTIVATE_START ==="
 $psEndMarker = "# === NATIVE_VENV_AUTO_ACTIVATE_END ==="
 
-if (-not (Test-Path (Split-Path $psProfilePath))) { New-Item -ItemType Directory -Force -Path (Split-Path $psProfilePath) | Out-Null }
-if (-not (Test-Path $psProfilePath)) { New-Item -ItemType File -Force -Path $psProfilePath | Out-Null }
-
-# 一律明確以 UTF-8 讀寫：Windows PowerShell 5.1 的 Get-Content 會把無 BOM 的 UTF-8 當 ANSI 讀，中文會變亂碼
-$psContent = [System.IO.File]::ReadAllText($psProfilePath, [System.Text.Encoding]::UTF8)
-$psExisted = $psContent -and $psContent -match [regex]::Escape($psMarker)
-
 $psCode = @'
 # === NATIVE_VENV_AUTO_ACTIVATE_START ===
-# === 無頭判定 ===
-# 輸出被重導、或以 -Command/-EncodedCommand/-NonInteractive 啟動者視為無頭（不畫 prompt）。
-# 注意：VSCode/Cursor 終端以 -Command 注入 shell integration，但輸出未被重導；
-# 為避免誤判，TERM_PROGRAM=vscode 一律視為互動。
-$__cl = [Environment]::GetCommandLineArgs()
-$__isHeadless = [Console]::IsOutputRedirected -or [bool]($__cl -match '^(-NonInteractive|-NonI|-Command|-C|-EncodedCommand|-E)$')
-if ($env:TERM_PROGRAM -eq 'vscode') { $__isHeadless = $false }
+__HEADLESS_SNIPPET__
 
 # 1. 歷史紀錄最佳化（僅互動；Set-PSReadLineOption 會隱式載入 PSReadLine，實測無頭行程要多付 ~150ms）
 if (-not $__isHeadless) {
@@ -121,7 +113,9 @@ function global:Auto-Activate-Venv {
     $exeName = "python.exe"
     $sep = [IO.Path]::PathSeparator
 
-    # 快速路徑：同一 venv 仍為真啟用狀態，且 cwd 未離開該 venv 子樹 -> 直接返回，零磁碟存取
+    # 快速路徑：同一 venv 仍為真啟用狀態，且 cwd 仍在該 venv 資料夾內（如 .venv\Scripts）-> 直接返回，零磁碟存取。
+    # 在專案根目錄時不會命中，會走下面的向上尋找（實測每個 prompt 約 0.3ms；
+    # 把快速路徑放寬到專案根只能降到約 0.13ms，且巢狀 venv 會判錯，不值得）。
     if (_Venv-Is-Live -venvPath $env:VIRTUAL_ENV -binDir $binDir) {
         if ($PWD.Path -eq $env:VIRTUAL_ENV -or
             $PWD.Path.StartsWith("$env:VIRTUAL_ENV$sep", [StringComparison]::OrdinalIgnoreCase)) { return }
@@ -182,21 +176,33 @@ Auto-Activate-Venv
 # === NATIVE_VENV_AUTO_ACTIVATE_END ===
 '@
 
-$psUpdated = Update-MarkedBlock -Content $psContent -StartMarker $psMarker -EndMarker $psEndMarker -NewBlock $psCode
-$psFinal = $psUpdated.TrimEnd("`r", "`n") + "`r`n"
-if (($psFinal -replace "`r`n", "`n") -ne ($psContent -replace "`r`n", "`n")) {
-    [System.IO.File]::WriteAllText($psProfilePath, $psFinal, [System.Text.UTF8Encoding]::new($true))
-    if ($psExisted) {
-        Write-Host "[PowerShell] 已更新 `$PROFILE 內的 venv 自動啟動區塊。" -ForegroundColor Green
+$psCode = $psCode.Replace('__HEADLESS_SNIPPET__', $HeadlessSnippet)
+
+foreach ($t in $psTargets) {
+    $psProfilePath = $t.Path
+    if (-not (Test-Path (Split-Path $psProfilePath))) { New-Item -ItemType Directory -Force -Path (Split-Path $psProfilePath) | Out-Null }
+    if (-not (Test-Path $psProfilePath)) { New-Item -ItemType File -Force -Path $psProfilePath | Out-Null }
+
+    # 一律明確以 UTF-8 讀寫：Windows PowerShell 5.1 的 Get-Content 會把無 BOM 的 UTF-8 當 ANSI 讀，中文會變亂碼
+    $psContent = [System.IO.File]::ReadAllText($psProfilePath, [System.Text.Encoding]::UTF8)
+    $psExisted = $psContent -and $psContent -match [regex]::Escape($psMarker)
+
+    $psUpdated = Update-MarkedBlock -Content $psContent -StartMarker $psMarker -EndMarker $psEndMarker -NewBlock $psCode
+    $psFinal = $psUpdated.TrimEnd("`r", "`n") + "`r`n"
+    if (($psFinal -replace "`r`n", "`n") -ne ($psContent -replace "`r`n", "`n")) {
+        [System.IO.File]::WriteAllText($psProfilePath, $psFinal, [System.Text.UTF8Encoding]::new($true))
+        if ($psExisted) {
+            Write-Host "[PowerShell/$($t.Label)] 已更新 venv 自動啟動區塊。" -ForegroundColor Green
+        } else {
+            Write-Host "[PowerShell/$($t.Label)] 已成功寫入 venv 自動啟動區塊！" -ForegroundColor Green
+        }
     } else {
-        Write-Host "[PowerShell] 已成功寫入 `$PROFILE！" -ForegroundColor Green
+        Write-Host "[PowerShell/$($t.Label)] venv 區塊已是最新，跳過。" -ForegroundColor Yellow
     }
-} else {
-    Write-Host "[PowerShell] venv 區塊已是最新，跳過。" -ForegroundColor Yellow
 }
 
 # PS5（Documents\WindowsPowerShell）不做任何轉導：期待 5.1 的呼叫端得到真 5.1 語意。
-# PS5 互動的「升級到 7」改由下面的熱鍵處理（巢狀，非轉導）。
+# PS5 互動的「升級到 7」由 shell-env.ps1 寫入的 Alt+` 熱鍵處理（巢狀，非轉導）。
 # ------------------------------------------------------------------------------
 # 2. 寫入 Bash 設定檔 (~/.bashrc)
 # ------------------------------------------------------------------------------
@@ -299,7 +305,7 @@ if ($bashUpdatedUnix -ne $bashContentNorm) {
     if ($bashExisted) {
         Write-Host "[Bash] 已更新 $bashrcPath 內的 venv 自動啟動區塊。" -ForegroundColor Green
     } else {
-        Write-Host "[Bash] 已成功寫入 $bashrcPath ！” -ForegroundColor Green
+        Write-Host "[Bash] 已成功寫入 $bashrcPath ！" -ForegroundColor Green
     }
 } else {
     Write-Host "[Bash] venv 區塊已是最新，跳過。" -ForegroundColor Yellow

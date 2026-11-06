@@ -2,6 +2,8 @@
 # 以標記區塊管理，可重複執行（已存在就原地更新，不會重複寫入）；
 # 也會把舊版「沒有標記」的相同內容認出來並收進區塊，避免重複。
 
+. (Join-Path $PSScriptRoot 'profile-common.ps1')    # $PsProfileTargets、$HeadlessSnippet
+
 $utf8Bom   = New-Object System.Text.UTF8Encoding($true)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
@@ -105,7 +107,8 @@ if ([IO.Directory]::Exists($gitApps)) {
         $n = [IO.Path]::GetFileName($d)
         if ($n -notmatch '^\d+(\.\d+)+') { continue }
         if (-not [IO.File]::Exists([IO.Path]::Combine($d, 'bin\bash.exe'))) { continue }
-        $v = [version]($n -replace '-.*$', '')
+        # 只取開頭的數字版本：scoop 目錄名可能帶 .windows.1 之類後綴，直接轉 [version] 會丟例外，讓每個新視窗都報錯
+        $v = [version][regex]::Match($n, '^\d+(\.\d+){1,3}').Value
         if ($null -eq $bestVer -or $v -gt $bestVer) { $bestName = $n; $bestVer = $v }
     }
     if ($bestName) { $GitBashBin = [IO.Path]::Combine($gitApps, $bestName, 'bin') }
@@ -125,30 +128,27 @@ if ($PSVersionTable.PSVersion.Major -le 5) {
 }
 
 # PS5 專屬：升級熱鍵——互動 prompt 按 Alt+` → 清屏並啟動巢狀 pwsh（含完整環境）。
-# 巢狀而非轉導：自動化呼叫（-Command/-File/-EncodedCommand）保留真 5.1；巢狀 pwsh 裡再按 = 無操作。
-if ($PSVersionTable.PSVersion.Major -le 5) {
-    $cl = [Environment]::GetCommandLineArgs()
-    if (-not ($cl -match '^[/-](command|c|file|f|encodedcommand|e|noni|noninteractive)')) {
-        try {
-            # 可用 chord：Alt+`、Shift+F2；不可用（實測不派送或有副作用）：Ctrl+Alt 系、Shift+可印字元、Ctrl+字母、Alt+Q
-            Set-PSReadLineKeyHandler -Chord 'Alt+`' -ScriptBlock {
-                # clear-host 在接受指令後才執行，會把「輸入的 pwsh 那行」和 PS5 banner 一起擦掉，
-                # 畫面只剩 pwsh 的 banner + prompt，看起來像直接開了一個全新的 pwsh
-                [Microsoft.PowerShell.PSConsoleReadLine]::Insert('clear-host; pwsh')
-                [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
-            }
-        } catch { }
-    }
+# 做法：不在 handler 內直接起行程，而是把 "Clear-Host; pwsh" 當成使用者輸入並送出（AcceptLine），
+# 這樣 venv 提示字元 (.venv) PS ...> 下也一樣能用，pwsh 繼承目前目錄與 PATH。
+# 巢狀而非轉導：無頭的自動化呼叫（-File/-EncodedCommand/-NonInteractive/輸出被重導）保留真 5.1、不註冊熱鍵；
+# 只在 PS5 註冊，所以巢狀 pwsh 裡按 = 無操作。
+__HEADLESS_SNIPPET__
+if ($PSVersionTable.PSVersion.Major -le 5 -and -not $__isHeadless) {
+    try {
+        Set-PSReadLineKeyHandler -Chord 'Alt+`' -BriefDescription 'UpgradeToPwsh' `
+            -Description 'Clear screen and start pwsh' -ScriptBlock {
+            [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
+            [Microsoft.PowerShell.PSConsoleReadLine]::Insert('Clear-Host; pwsh')
+            [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
+        }
+    } catch { }
 }
 '@ -replace "`r`n", "`n"
 
-# 正典 pwsh profile（Documents\PowerShell）與 PS5 fallback（Documents\WindowsPowerShell）
-# 都寫入同一份 SHELL_ENV；venv／prompt／轉導 shim 由 venv.ps1 管理
-$docDir = [Environment]::GetFolderPath('MyDocuments')
-$psTargets = @(
-    (Join-Path $docDir 'PowerShell\Microsoft.PowerShell_profile.ps1'),
-    (Join-Path $docDir 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1')
-)
+# 正典 pwsh profile 與 PS5 profile（路徑與無頭判定定義在 profile-common.ps1）：
+# 內容相同（版本差異用內部 gate 處理）；venv 區塊由 venv.ps1 部署到兩者
+$psInner = $psInner.Replace('__HEADLESS_SNIPPET__', $HeadlessSnippet)
+$psTargets = $PsProfileTargets
 foreach ($psProfilePath in $psTargets) {
     $psDir = Split-Path $psProfilePath
     if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Force -Path $psDir | Out-Null }

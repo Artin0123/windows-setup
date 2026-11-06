@@ -131,6 +131,9 @@ function Invoke-WindowsSetup {
 
     $psExe = (Get-Process -Id $PID).Path     # 用目前這個 PowerShell 跑子腳本，$PROFILE 才會和你平常用的一致
 
+    # shell-env.ps1 / venv.ps1 共用的定義檔（兩者以 $PSScriptRoot dot-source，需和它們放在同一資料夾）
+    if ($steps -contains 'shell' -or $steps -contains 'venv') { [void](Get-RemoteScript 'profile-common.ps1') }
+
     # ---------------------------------------------------------------- shell-env（.bashrc / $PROFILE 基本設定，可重複執行）
     if ($steps -contains 'shell') {
         Write-Host '=== [2/4] shell-env ===' -ForegroundColor Cyan
