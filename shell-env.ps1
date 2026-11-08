@@ -131,13 +131,18 @@ if ($bashNew -ne $bashOld) {
 # ------------------------------------------------------------------------------
 $psInner = @'
 # 效能原則：此檔每個新 pwsh 行程都會執行，熱路徑一律用 .NET BCL（[IO.*]）而非 cmdlet——
-# Join-Path/Test-Path 在全新行程會觸發模組自動載入掃描（實測 +150ms），[IO.*] 只要 +35ms。
+# Join-Path/Test-Path 在全新行程會觸發模組自動載入（實測 cmdlet 版 57ms@PS5.1／185ms@pwsh7，
+# [IO.*] 版 23ms@PS5.1／32ms@pwsh7）。同理，New-Object 也會觸發 Microsoft.PowerShell.Utility
+# 自動載入（實測 +42ms@PS5.1／+152ms@pwsh7），熱路徑一律改用 ::new。
 # ⚠️ 刻意不用 scoop 的 current junction（scoop\apps\git\current\bin），改用版本目錄掃描——這是設計決策，勿改回：
 # junction 路徑會被外部程式快取或寫入登錄（系統匣圖示、捷徑解析等），scoop 更新換版後
 # 舊的快取/登錄資訊會指錯而失效，實例見 v2rayN #5759：
 # https://github.com/2dust/v2rayN/issues/5759#issuecomment-3476104944
-# 多花幾 ms 換取 PATH 永遠指向真實版本目錄，值得。以下以純 .NET 實作掃描（不用 cmdlet，
-# 避免每個新 pwsh 行程觸發模組自動載入掃描，實測 cmdlet 版 +150ms）。
+# 以下以純 .NET 實作掃描（不用 cmdlet，避免每個新 pwsh 行程觸發模組自動載入，實測 cmdlet 版 +150ms）。
+# 成本實測：整個掃描區塊 19ms@PS5.1／31ms@pwsh7（相對空檔）。其中絕大多數是 .NET 型別與靜態方法
+# 的「首次呼叫」初始化，不是磁碟 I/O——同一段程式在已暖機的行程內量，每個操作只有 0.1～0.2ms。
+# 因此「快取 + 驗證」的改法實測反而更慢（5.1 28.9ms vs 22.7ms）：它引入了更多首次呼叫的操作。
+# 要真正省下這 20～30ms，唯一有效的做法是讓這裡整段不執行（把真實版本目錄寫進使用者 PATH）。
 $GitBashBin = $null
 $gitApps = [IO.Path]::Combine($HOME, 'scoop\apps\git')
 if ([IO.Directory]::Exists($gitApps)) {
@@ -169,7 +174,10 @@ if ($PSVersionTable.PSVersion.Major -le 5) {
     $PSDefaultParameterValues['*:Encoding'] = 'utf8'
     # PowerShell 餵給 native 程式 stdin 的編碼：PS5 預設 ASCII，中文會變成 ?；
     # 必須用「無 BOM」的 UTF-8——直接用 [Text.Encoding]::UTF8 會在 stdin 開頭多送一個 BOM（實測）
-    $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    # ⚠️ 用 ::new 而非 New-Object：New-Object 會觸發 Microsoft.PowerShell.Utility 模組自動載入，
+    # 單獨量這一行：New-Object 48ms、::new 6ms（整份 profile 因此從 92.5ms 降到 58.7ms）。
+    # 兩者產生的物件完全相同（同型別、GetPreamble().Length 都是 0，已驗證）。
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 }
 
 # PS5 專屬：升級熱鍵——互動 prompt 按 Alt+` → 清屏並啟動巢狀 pwsh（含完整環境）。
@@ -226,10 +234,13 @@ foreach ($psProfilePath in ($psTargets | Where-Object { $_ -notmatch 'WindowsPow
 $venvPsInner = @'
 __HEADLESS_SNIPPET__
 
-# 1. 歷史紀錄最佳化（僅互動；Set-PSReadLineOption 會隱式載入 PSReadLine，實測無頭行程要多付 ~150ms）
+# 1. 歷史紀錄最佳化（僅互動）
+# Set-PSReadLineOption 會隱式載入 PSReadLine，無頭行程實測要多付約 29ms（PS5.1）／183ms（pwsh 7）
+# 的模組載入費，所以這一段必須留在 if 裡面。互動視窗本來就會載入（host 畫 prompt 時），躲不掉。
+# 兩個選項合併成一次呼叫：實測與分兩次呼叫無差異（5.1 66.2 vs 67.2ms、7 244.8 vs 245.1ms），
+# 成本由模組載入與第一次選項初始化主導，不是呼叫次數。
 if (-not $__isHeadless) {
-    Set-PSReadLineOption -HistoryNoDuplicates
-    Set-PSReadLineOption -AddToHistoryHandler {
+    Set-PSReadLineOption -HistoryNoDuplicates -AddToHistoryHandler {
         param([string]$line)
         if ([string]::IsNullOrWhiteSpace($line)) { return $false }
         if ($line.StartsWith(" ")) { return $false }
