@@ -82,6 +82,34 @@ shopt -s histappend
 export HISTCONTROL=ignoreboth
 # 關閉 MSYS 自動路徑轉換：原因與影響見 ./docs/msys-no-pathconv.md
 export MSYS_NO_PATHCONV=1
+# bash -c 時 TMPDIR 是空的，"$TMPDIR/x" 會悄悄變成 /x（解析到 git 安裝目錄）。
+# 用 LOCALAPPDATA 而非 TEMP：後者在 bash 裡已是 /tmp，=1 時原生程式不會轉換。
+if [ -n "$LOCALAPPDATA" ]; then export TMPDIR="${LOCALAPPDATA//\\//}/Temp"; fi
+# cmd 開關修復（argv 層）：以 MSYS_NO_PATHCONV 是否存在決定方向，=0 與 =1 都兼容，與 MSYS 判斷方式一致；
+# =1 把 //c 削成 /c；=0 模式把 /c 補成 //c 讓轉換層削回 /c。換回 =0 與裝函式是兩個獨立決定。
+# sw 旗標只處理第一個 /c、/k 之前的開關區，命令字串本身不碰（cmd /c "echo //c stays" 原樣輸出）。
+# [cCkK]* 只比開頭：cmd 接受附著寫法（cmd /cver 能動）。
+# 涵蓋不到的尾巴：env cmd、timeout 5 cmd、command cmd、完整路徑、$COMSPEC——漏掉只是維持原狀。
+_cmdsw() { local a=() sw=1 x
+  for x in "$@"; do
+    if [ $sw = 1 ]; then
+      if [ -n "${MSYS_NO_PATHCONV+x}" ]; then case "$x" in //[A-Za-z]*) x="${x#/}";; esac
+      else case "$x" in /[A-Za-z]*) x="/$x";; esac; fi
+      case "${x#/}" in [cCkK]*) sw=0;; esac
+    fi
+    a+=("$x")
+  done; command cmd "${a[@]}"; }
+cmd() { _cmdsw "$@"; }; cmd.exe() { _cmdsw "$@"; }
+# 具名工具的單斜線旗標修復（taskkill /IM 等）：只動「單一段、開頭是字母或 ?」的 token；
+# 含第二個斜線的 token 不動，所以 //server/share 這類 UNC 與 /tmp/x 這類真路徑不會被碰。
+# 列已知工具而非通用規則：bash 沒有執行前通用鉤子，DEBUG trap 屬輸入端 lexer（開放集合），不採用。
+_sf() { local t="$1"; shift; local a=() x
+  for x in "$@"; do
+    if [ -n "${MSYS_NO_PATHCONV+x}" ]; then case "$x" in //[A-Za-z?]*) [[ "${x#//}" != */* ]] && x="${x#/}";; esac
+    else case "$x" in /[A-Za-z?]*) [[ "${x#/}" != */* ]] && x="/$x";; esac; fi
+    a+=("$x")
+  done; command "$t" "${a[@]}"; }
+taskkill() { _sf taskkill "$@"; }; tasklist() { _sf tasklist "$@"; }; findstr() { _sf findstr "$@"; }
 '@ -replace "`r`n", "`n"
 
 $bashOld = Read-Utf8Text $bashrcPath
