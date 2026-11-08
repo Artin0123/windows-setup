@@ -5,10 +5,14 @@
 # ※※※ 本檔必須以 UTF-8 with BOM 儲存 ※※※
 # PS 5.1 對無 BOM 的 .ps1 以 ANSI 解析，中文註解亂碼會導致解析直接失敗。
 
-# 兩個引擎的 CurrentUserCurrentHost profile：pwsh 正典 + PS5（內容相同，版本差異用 profile 內部 gate 處理）
+# CurrentUserCurrentHost profile：WindowsPowerShell (PS5) 一律設定；pwsh (PowerShell 7+) 則在偵測到環境中有安裝時才加入
 $docDir = [Environment]::GetFolderPath('MyDocuments')
+$hasPwsh = ($PSVersionTable.PSEdition -eq 'Core') -or
+    [bool](Get-Command pwsh -ErrorAction SilentlyContinue) -or
+    ($env:ProgramFiles -and [IO.File]::Exists([IO.Path]::Combine($env:ProgramFiles, 'PowerShell\7\pwsh.exe')))
+
 $psTargets = @(
-    (Join-Path $docDir 'PowerShell\Microsoft.PowerShell_profile.ps1'),
+    if ($hasPwsh) { (Join-Path $docDir 'PowerShell\Microsoft.PowerShell_profile.ps1') }
     (Join-Path $docDir 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1')
 )
 
