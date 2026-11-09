@@ -143,6 +143,11 @@ $psInner = @'
 # 的「首次呼叫」初始化，不是磁碟 I/O——同一段程式在已暖機的行程內量，每個操作只有 0.1～0.2ms。
 # 因此「快取 + 驗證」的改法實測反而更慢（5.1 28.9ms vs 22.7ms）：它引入了更多首次呼叫的操作。
 # 要真正省下這 20～30ms，唯一有效的做法是讓這裡整段不執行（把真實版本目錄寫進使用者 PATH）。
+# 自訂 C# bash.exe shim（呼叫時掃版本）+ profile 只前綴 scoop\shims 也屬「不執行」候選，實測否決：
+# 版本掃描在 .NET shim 內只佔 0.6ms（空殼 exe 暖機 24.2ms、含掃描 24.8ms）——真正的代價是 .NET
+# 行程啟動的 24ms，每次呼叫 bash 都要付；bash -c 短呼叫基準 40ms，等於每次 +60%。而本區塊的
+# 17~19ms 只在「每個新 shell 行程」付一次，損益兩平點是平均每開一個 shell 呼叫 bash 少於 0.8 次，
+# 實際用法（互動、迴圈、工具連續呼叫）遠高於此，C# shim 淨虧，維持現狀。
 $GitBashBin = $null
 $gitApps = [IO.Path]::Combine($HOME, 'scoop\apps\git')
 if ([IO.Directory]::Exists($gitApps)) {
